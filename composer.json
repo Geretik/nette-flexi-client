@@ -1,0 +1,32 @@
+{
+  "name": "acme/nette-abra-flexi",
+  "description": "Nette extension for ABRA Flexi API",
+  "type": "library",
+  "license": "proprietary",
+  "require": {
+    "php": "^8.2",
+    "nette/di": "^3.2",
+    "nette/schema": "^1.3",
+    "nette/utils": "^4.0",
+    "contributte/guzzlette": "^3.3",
+    "guzzlehttp/guzzle": "^7.9",
+    "psr/log": "^3.0"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^11.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "Acme\\AbraFlexi\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Acme\\AbraFlexi\\Tests\\": "tests/"
+    }
+  },
+  "scripts": {
+    "test": "phpunit -c phpunit.xml --exclude-group integration",
+    "test:integration": "phpunit -c phpunit.xml --group integration"
+  }
+}
