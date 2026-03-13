@@ -10,6 +10,7 @@ use Acme\AbraFlexi\Http\GuzzleHttpTransport;
 use Acme\AbraFlexi\Http\HttpResponse;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ConnectException;
+use GuzzleHttp\Exception\RequestException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
@@ -90,6 +91,46 @@ final class GuzzleHttpTransportTest extends TestCase
             self::assertNull($exception->getResponseBody());
             self::assertStringContainsString('HTTP transport error', $exception->getMessage());
             self::assertInstanceOf(ConnectException::class, $exception->getPrevious());
+        }
+    }
+
+    public function testSanitizesExceptionDetailsForTransportFailure(): void
+    {
+        $request = new Request(
+            'GET',
+            'https://demo-user:demo-password@demo.flexibee.eu/c/demo-company/adresar?token=secret-token',
+        );
+        $response = new Response(401, ['Content-Type' => ['application/json']], '{"error":"unauthorized"}');
+        $mock = new MockHandler([
+            RequestException::create($request, $response),
+        ]);
+        $handlerStack = HandlerStack::create($mock);
+        $logger = new InMemoryLogger();
+        $transport = new GuzzleHttpTransport(
+            client: new Client(['handler' => $handlerStack]),
+            config: $this->createConfig(),
+            logger: $logger,
+        );
+
+        try {
+            $transport->request('GET', (string) $request->getUri());
+            self::fail('Expected HttpException was not thrown.');
+        } catch (HttpException $exception) {
+            self::assertStringContainsString('token=***', $exception->getMessage());
+            self::assertStringNotContainsString('secret-token', $exception->getMessage());
+            self::assertStringNotContainsString('demo-password', $exception->getMessage());
+
+            self::assertCount(2, $logger->records);
+            $errorRecord = $logger->records[1];
+            self::assertSame('error', $errorRecord['level']);
+            self::assertTrue(is_a($errorRecord['context']['exceptionClass'], RequestException::class, true));
+            self::assertStringContainsString(
+                'https://demo-user:***@demo.flexibee.eu/c/demo-company/adresar?token=***',
+                $errorRecord['context']['exceptionMessage'],
+            );
+            self::assertArrayNotHasKey('exception', $errorRecord['context']);
+            self::assertStringNotContainsString('secret-token', json_encode($errorRecord['context'], JSON_THROW_ON_ERROR));
+            self::assertStringNotContainsString('demo-password', json_encode($errorRecord['context'], JSON_THROW_ON_ERROR));
         }
     }
 

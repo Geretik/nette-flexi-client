@@ -1,23 +1,23 @@
 # nette-flexi-client
 
-Nette extension and reusable client for ABRA Flexi REST API.
+Nette rozšíření a znovupoužitelný klient pro REST API ABRA Flexi.
 
-## Requirements
+## Požadavky
 
 - PHP 8.2+
 - Nette DI
 - contributte/guzzlette
 - guzzlehttp/guzzle
 
-## Installation
+## Instalace
 
 ```bash
 composer require acme/nette-abra-flexi
 ```
 
-## Nette Configuration
+## Konfigurace v Nette
 
-Register the extension in your `config.neon`:
+Zaregistrujte rozšíření do `config.neon`:
 
 ```neon
 extensions:
@@ -35,23 +35,34 @@ abraFlexi:
             Accept: application/json
 ```
 
-`FlexiExtension` creates its own dedicated Guzzle client through `Contributte\Guzzlette\ClientFactory`, so the transport always uses the Guzzlette-backed client registered in the container, regardless of the extension alias.
+`FlexiExtension` si přes `Contributte\Guzzlette\ClientFactory` vytváří vlastního dedikovaného Guzzle klienta, takže transport vždy používá klienta založeného na Guzzlette, který je zaregistrovaný v DI kontejneru, bez ohledu na alias rozšíření.
 
-## Architecture
+Pokud potřebujete více Flexi připojení, zaregistrujte rozšíření pod více aliasy a používejte pojmenované klientské služby:
 
-Library is split into focused layers:
+```neon
+extensions:
+    guzzle: Contributte\Guzzlette\DI\GuzzleExtension
+    salesFlexi: Acme\AbraFlexi\DI\FlexiExtension
+    warehouseFlexi: Acme\AbraFlexi\DI\FlexiExtension
+```
 
-- `Config/FlexiConfig` - validated connection configuration
-- `Endpoint/EndpointBuilder` - URL/endpoint composition for company and agenda paths
-- `Http/HttpTransportInterface` + `Http/GuzzleHttpTransport` - HTTP transport over a dedicated client created by Guzzlette
-- `Response/ResponseParser` - JSON/XML parsing, `winstrom` root normalization and API error payload detection
-- `Client/FlexiClient` - public API for `GET/POST/PUT/DELETE` using Flexi `.json` or `.xml` endpoints
-- `Exception/*` - unified exception hierarchy for transport/API/parse failures
-- `DI/FlexiExtension` - Nette extension wiring all services from NEON config
+Klienti jsou pak dostupní jako `@salesFlexi.client` a `@warehouseFlexi.client`. Autowiring jediné instance `Acme\AbraFlexi\Client\FlexiClient` dál funguje beze změny.
 
-## Usage
+## Architektura
 
-Inject `Acme\AbraFlexi\Client\FlexiClient` into your service:
+Knihovna je rozdělená do samostatných vrstev:
+
+- `Config/FlexiConfig` - validovaná konfigurace připojení
+- `Endpoint/EndpointBuilder` - skládání URL/endpointů pro firemní a agendové cesty
+- `Http/HttpTransportInterface` + `Http/GuzzleHttpTransport` - HTTP transport nad dedikovaným klientem vytvořeným přes Guzzlette
+- `Response/ResponseParser` - parsování JSON/XML, normalizace kořene `winstrom` a detekce chybových payloadů API
+- `Client/FlexiClient` - veřejné API pro `GET/POST/PUT/DELETE` nad Flexi `.json` nebo `.xml` endpointy
+- `Exception/*` - sjednocená hierarchie výjimek pro chyby transportu/API/parsing
+- `DI/FlexiExtension` - Nette rozšíření, které zapojuje všechny služby z NEON konfigurace
+
+## Použití
+
+Vstříkněte `Acme\AbraFlexi\Client\FlexiClient` do své služby:
 
 ```php
 <?php
@@ -76,13 +87,13 @@ final readonly class InvoiceSync
 }
 ```
 
-Supported methods:
+Podporované metody:
 - `get(string $agenda, ?string $recordId = null, array $query = [])`
 - `post(string $agenda, array|string $payload, array $query = [])`
 - `put(string $agenda, string $recordId, array|string $payload, array $query = [])`
 - `delete(string $agenda, string $recordId, array $query = [])`
 
-Example with query and payload:
+Příklad s parametry dotazu a payloadem:
 
 ```php
 $list = $flexiClient->get('adresar', null, ['limit' => 20, 'detail' => 'full']);
@@ -93,47 +104,47 @@ $created = $flexiClient->post('adresar', [
 ]);
 ```
 
-Array payloads are automatically wrapped to the Flexi JSON document shape:
+Pole se automaticky zabalí do tvaru Flexi JSON dokumentu:
 
 ```json
 {"winstrom":{"adresar":{"kod":"CUST-001","nazev":"Acme s.r.o."}}}
 ```
 
-Responses are normalized to the inner document payload, so a Flexi response such as `{"winstrom":{"@version":"1.0","adresar":[...]}}` is returned as `['@version' => '1.0', 'adresar' => [...]]`.
+Odpovědi se normalizují na vnitřní payload dokumentu, takže Flexi odpověď jako `{"winstrom":{"@version":"1.0","adresar":[...]}}` se vrátí jako `['@version' => '1.0', 'adresar' => [...]]`.
 
-If you need to call an XML endpoint, pass a raw XML string payload. The client will switch the request URL to `.xml` and send `Accept`/`Content-Type: application/xml`.
+Pokud potřebujete volat XML endpoint, předejte surový XML řetězec. Klient přepne URL požadavku na `.xml` a odešle `Accept`/`Content-Type: application/xml`.
 
-## Error Handling
+## Zpracování chyb
 
-Client uses dedicated exceptions:
+Klient používá vlastní výjimky:
 
-- `FlexiException` - base exception
-- `HttpException` - transport/status errors (`statusCode`, `responseBody`)
-- `ApiErrorException` - API payload returned a business error
-- `ParseException` - invalid/unexpected response format
+- `FlexiException` - základní výjimka
+- `HttpException` - chyby transportu/stavového kódu (`statusCode`, `responseBody`)
+- `ApiErrorException` - aplikační chyba vrácená v payloadu API
+- `ParseException` - neplatný nebo neočekávaný formát odpovědi
 
-## Logging
+## Logování
 
-`GuzzleHttpTransport` supports optional `Psr\Log\LoggerInterface`.
+`GuzzleHttpTransport` podporuje volitelný `Psr\Log\LoggerInterface`.
 
-- Request/response/error events are logged
-- Sensitive values are masked before logging, including request/response payloads and sensitive headers (`auth`, `password`, `authorization`, `token`, ...)
+- Logují se události požadavků, odpovědí i chyb
+- Citlivé hodnoty se před zalogováním maskují, včetně payloadů požadavků/odpovědí a citlivých hlaviček (`auth`, `password`, `authorization`, `token`, ...)
 
-## Testing
+## Testování
 
-Run tests in Docker (PHP 8.2):
+Spuštění testů v Dockeru (PHP 8.2):
 
 ```bash
 docker compose run --rm app composer test -- --no-coverage
 ```
 
-Run the real API integration test only when explicitly enabled:
+Reálný integrační test proti API spouštějte jen při explicitním povolení:
 
 ```bash
 ABRA_FLEXI_RUN_INTEGRATION=1 composer test:integration
 ```
 
-Defaults target the public demo Flexi instance:
+Výchozí hodnoty míří na veřejnou demo instanci Flexi:
 
 - `ABRA_FLEXI_BASE_URL=https://demo.flexibee.eu:5434`
 - `ABRA_FLEXI_COMPANY=demo`
@@ -141,11 +152,11 @@ Defaults target the public demo Flexi instance:
 - `ABRA_FLEXI_PASSWORD=winstrom`
 - `ABRA_FLEXI_TIMEOUT=10`
 
-Current status:
+Aktuální stav:
 
-- Unit tests for endpoint builder
-- Unit tests for response parser
-- Unit tests for HTTP transport (including masked logging)
-- Unit tests for main client
-- DI extension compile test
-- Opt-in integration test covering real create/read/update/delete flow against ABRA Flexi API
+- Jednotkové testy pro builder endpointů
+- Jednotkové testy pro parser odpovědí
+- Jednotkové testy pro HTTP transport (včetně maskovaného logování)
+- Jednotkové testy pro hlavního klienta
+- Kompilační test DI rozšíření
+- Volitelný integrační test pokrývající reálný scénář create/read/update/delete proti ABRA Flexi API

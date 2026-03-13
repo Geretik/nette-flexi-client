@@ -32,10 +32,11 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
     {
         $requestOptions = array_replace($this->defaultOptions(), $options);
         $upperMethod = strtoupper($method);
+        $maskedUrl = $this->maskSensitiveUrl($url);
 
         $this->logger?->debug('Sending Flexi API request.', [
             'method' => $upperMethod,
-            'url' => $this->maskSensitiveUrl($url),
+            'url' => $maskedUrl,
             'options' => $this->maskSensitiveData($requestOptions),
         ]);
 
@@ -44,6 +45,7 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
         } catch (GuzzleException $exception) {
             $statusCode = 0;
             $responseBody = null;
+            $maskedExceptionMessage = $this->maskSensitiveText($exception->getMessage());
 
             if ($exception instanceof RequestException && $exception->getResponse() !== null) {
                 $statusCode = $exception->getResponse()->getStatusCode();
@@ -52,14 +54,15 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
 
             $this->logger?->error('Flexi API transport error.', [
                 'method' => $upperMethod,
-                'url' => $this->maskSensitiveUrl($url),
+                'url' => $maskedUrl,
                 'statusCode' => $statusCode,
                 'responseBody' => $responseBody !== null ? $this->maskSensitivePayload($responseBody) : null,
-                'exception' => $exception,
+                'exceptionClass' => $exception::class,
+                'exceptionMessage' => $maskedExceptionMessage,
             ]);
 
             throw new HttpException(
-                message: sprintf('HTTP transport error for %s %s: %s', $upperMethod, $url, $exception->getMessage()),
+                message: sprintf('HTTP transport error for %s %s: %s', $upperMethod, $maskedUrl, $maskedExceptionMessage),
                 statusCode: $statusCode,
                 responseBody: $responseBody,
                 previous: $exception,
@@ -73,7 +76,7 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
 
         $this->logger?->debug('Received Flexi API response.', [
             'method' => $upperMethod,
-            'url' => $this->maskSensitiveUrl($url),
+            'url' => $maskedUrl,
             'statusCode' => $statusCode,
             'headers' => $this->maskSensitiveData($headers),
         ]);
@@ -81,13 +84,13 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
         if ($statusCode >= 400) {
             $this->logger?->warning('Flexi API request returned error status.', [
                 'method' => $upperMethod,
-                'url' => $this->maskSensitiveUrl($url),
+                'url' => $maskedUrl,
                 'statusCode' => $statusCode,
                 'responseBody' => $this->maskSensitivePayload($body),
             ]);
 
             throw new HttpException(
-                message: sprintf('HTTP request failed with status %d for %s %s.', $statusCode, $upperMethod, $url),
+                message: sprintf('HTTP request failed with status %d for %s %s.', $statusCode, $upperMethod, $maskedUrl),
                 statusCode: $statusCode,
                 responseBody: $body,
             );
@@ -181,6 +184,17 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
             static fn(array $matches): string => $matches['prefix'] . '***',
             $payload,
         ) ?? $payload;
+    }
+
+    private function maskSensitiveText(string $text): string
+    {
+        $maskedText = preg_replace_callback(
+            '~[a-z][a-z0-9+.-]*://[^\s<>"\')]+~i',
+            fn(array $matches): string => $this->maskSensitiveUrl($matches[0]),
+            $text,
+        ) ?? $text;
+
+        return $this->maskSensitivePayload($maskedText);
     }
 
     private function maskJsonPayload(string $payload): ?string

@@ -44,13 +44,18 @@ final class FlexiExtension extends CompilerExtension
                 'username' => $config->username,
                 'password' => $config->password,
                 'timeout' => $config->timeout,
-            ]]);
+            ]])
+            ->setAutowired(false);
 
         $builder->addDefinition($this->prefix('endpointBuilder'))
-            ->setFactory(EndpointBuilder::class);
+            ->setFactory(EndpointBuilder::class, [
+                'config' => '@' . $this->prefix('config'),
+            ])
+            ->setAutowired(false);
 
         $builder->addDefinition($this->prefix('responseParser'))
-            ->setFactory(ResponseParser::class);
+            ->setFactory(ResponseParser::class)
+            ->setAutowired(false);
 
         $builder->addDefinition($this->prefix('guzzleClient'))
             ->setType(Client::class)
@@ -61,10 +66,15 @@ final class FlexiExtension extends CompilerExtension
             ->setFactory(GuzzleHttpTransport::class, [
                 'client' => '@' . $this->prefix('guzzleClient'),
                 'config' => '@' . $this->prefix('config'),
-            ]);
+            ])
+            ->setAutowired(false);
 
         $builder->addDefinition($this->prefix('client'))
-            ->setFactory(FlexiClient::class);
+            ->setFactory(FlexiClient::class, [
+                'endpointBuilder' => '@' . $this->prefix('endpointBuilder'),
+                'httpTransport' => '@' . $this->prefix('httpTransport'),
+                'responseParser' => '@' . $this->prefix('responseParser'),
+            ]);
     }
 
     public function beforeCompile(): void
