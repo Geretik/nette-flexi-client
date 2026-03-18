@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Acme\AbraFlexi\Tests\DI;
 
 use Acme\AbraFlexi\Client\FlexiClient;
+use Acme\AbraFlexi\Client\FlexiClientFactory;
 use Acme\AbraFlexi\DI\FlexiExtension;
 use Acme\AbraFlexi\Endpoint\EndpointBuilder;
 use Acme\AbraFlexi\Http\GuzzleHttpTransport;
@@ -106,5 +107,72 @@ final class FlexiExtensionTest extends TestCase
 
         $clientB = $container->getService('abraB.client');
         self::assertInstanceOf(FlexiClient::class, $clientB);
+    }
+
+    public function testSingleExtensionSupportsMultipleNamedConnectionsThroughFactory(): void
+    {
+        $className = 'FlexiNamedConnectionsContainer_' . str_replace('.', '_', uniqid('', true));
+
+        $compiler = new Compiler();
+        $compiler->setClassName($className);
+        $compiler->addExtension('httpClient', new GuzzleExtension());
+        $compiler->addExtension('abraFlexi', new FlexiExtension());
+        $compiler->addConfig([
+            'abraFlexi' => [
+                'baseUrl' => 'https://default.example',
+                'username' => 'default-user',
+                'password' => 'default-password',
+                'timeout' => 12.0,
+                'connections' => [
+                    'alpha' => 'company-alpha',
+                    'beta' => [
+                        'company' => 'company-beta',
+                        'baseUrl' => 'https://beta.example',
+                        'username' => 'beta-user',
+                        'password' => 'beta-password',
+                    ],
+                ],
+                'defaultConnection' => 'alpha',
+            ],
+        ]);
+
+        eval($compiler->compile());
+
+        /** @var object $container */
+        $container = new $className();
+
+        $defaultClient = $container->getByType(FlexiClient::class);
+        self::assertInstanceOf(FlexiClient::class, $defaultClient);
+        self::assertSame(
+            'https://default.example/c/company-alpha/adresar.json',
+            $this->extractEndpointBuilder($defaultClient)->agenda('adresar', null, [], 'json'),
+        );
+
+        $factory = $container->getByType(FlexiClientFactory::class);
+        self::assertInstanceOf(FlexiClientFactory::class, $factory);
+        self::assertSame(['alpha', 'beta'], $factory->names());
+        self::assertTrue($factory->hasNamed('beta'));
+
+        $betaClient = $factory->createNamed('beta');
+        self::assertSame(
+            'https://beta.example/c/company-beta/adresar.json',
+            $this->extractEndpointBuilder($betaClient)->agenda('adresar', null, [], 'json'),
+        );
+
+        $runtimeClient = $factory->create('runtime-company');
+        self::assertSame(
+            'https://default.example/c/runtime-company/adresar.json',
+            $this->extractEndpointBuilder($runtimeClient)->agenda('adresar', null, [], 'json'),
+        );
+    }
+
+    private function extractEndpointBuilder(FlexiClient $client): EndpointBuilder
+    {
+        $property = new \ReflectionProperty($client, 'endpointBuilder');
+
+        /** @var EndpointBuilder $endpointBuilder */
+        $endpointBuilder = $property->getValue($client);
+
+        return $endpointBuilder;
     }
 }

@@ -37,16 +37,33 @@ abraFlexi:
 
 `FlexiExtension` si přes `Contributte\Guzzlette\ClientFactory` vytváří vlastního dedikovaného Guzzle klienta, takže transport vždy používá klienta založeného na Guzzlette, který je zaregistrovaný v DI kontejneru, bez ohledu na alias rozšíření.
 
-Pokud potřebujete více Flexi připojení, zaregistrujte rozšíření pod více aliasy a používejte pojmenované klientské služby:
+Pokud potřebujete více firem, není nutné registrovat desítky extension aliasů. Stačí jedna extension a pojmenované connection profily:
 
 ```neon
 extensions:
     guzzle: Contributte\Guzzlette\DI\GuzzleExtension
-    salesFlexi: Acme\AbraFlexi\DI\FlexiExtension
-    warehouseFlexi: Acme\AbraFlexi\DI\FlexiExtension
+    abraFlexi: Acme\AbraFlexi\DI\FlexiExtension
+
+abraFlexi:
+    baseUrl: https://demo.flexibee.eu
+    username: demo-user
+    password: demo-password
+    timeout: 10.0
+    connections:
+        sales: company-sales
+        warehouse:
+            company: company-warehouse
+            timeout: 20.0
+    defaultConnection: sales
 ```
 
-Klienti jsou pak dostupní jako `@salesFlexi.client` a `@warehouseFlexi.client`. Autowiring jediné instance `Acme\AbraFlexi\Client\FlexiClient` dál funguje beze změny.
+Pak můžete:
+
+- injektovat `Acme\AbraFlexi\Client\FlexiClient` pro `defaultConnection`
+- injektovat `Acme\AbraFlexi\Client\FlexiClientFactory` a volat `$factory->createNamed('warehouse')`
+- nebo vytvářet klienty dynamicky přes `$factory->create('company-code')`
+
+Pokud vám víc vyhovuje původní model, stále můžete zaregistrovat více instancí `FlexiExtension` pod různými aliasy. Ten zůstává podporovaný.
 
 ## Architektura
 
@@ -83,6 +100,33 @@ final readonly class InvoiceSync
     public function loadInvoice(string $id): array
     {
         return $this->flexiClient->get('faktura-vydana', $id);
+    }
+}
+```
+
+Pro více firem za běhu injektujte raději továrnu:
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Model;
+
+use Acme\AbraFlexi\Client\FlexiClientFactory;
+
+final readonly class CompanySync
+{
+    public function __construct(
+        private FlexiClientFactory $flexiClientFactory,
+    ) {
+    }
+
+    public function loadInvoice(string $company, string $id): array
+    {
+        return $this->flexiClientFactory
+            ->create($company)
+            ->get('faktura-vydana', $id);
     }
 }
 ```
