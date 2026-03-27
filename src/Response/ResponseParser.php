@@ -8,9 +8,16 @@ use Acme\AbraFlexi\Exception\ApiErrorException;
 use Acme\AbraFlexi\Exception\ParseException;
 use JsonException;
 
+/**
+ * Parsuje HTTP odpovedi z Abra Flexi API do sjednoceneho pole.
+ */
 final class ResponseParser
 {
     /**
+     * Parsuje telo odpovedi (JSON/XML), odhali API chyby a vrati payload.
+     *
+     * @param string $body Telo HTTP odpovedi.
+     * @param string|null $contentType Hodnota Content-Type hlavicky, pokud je k dispozici.
      * @return array<mixed>
      * @throws ParseException
      * @throws ApiErrorException
@@ -34,6 +41,13 @@ final class ResponseParser
         return $documentPayload;
     }
 
+    /**
+     * Urci, zda je odpoved pravdepodobne JSON.
+     *
+     * @param string $body Telo odpovedi.
+     * @param string|null $contentType Hodnota Content-Type hlavicky, pokud je k dispozici.
+     * @return bool `true`, pokud odpoved vypada jako JSON.
+     */
     private function isJson(string $body, ?string $contentType): bool
     {
         if ($contentType !== null && str_contains(strtolower($contentType), 'json')) {
@@ -43,6 +57,13 @@ final class ResponseParser
         return str_starts_with($body, '{') || str_starts_with($body, '[');
     }
 
+    /**
+     * Urci, zda je odpoved pravdepodobne XML.
+     *
+     * @param string $body Telo odpovedi.
+     * @param string|null $contentType Hodnota Content-Type hlavicky, pokud je k dispozici.
+     * @return bool `true`, pokud odpoved vypada jako XML.
+     */
     private function isXml(string $body, ?string $contentType): bool
     {
         if ($contentType !== null) {
@@ -53,6 +74,8 @@ final class ResponseParser
     }
 
     /**
+     * Parsuje JSON odpoved a normalizuje ji na pole.
+     *
      * @return array<mixed>
      * @throws ParseException
      */
@@ -68,6 +91,8 @@ final class ResponseParser
     }
 
     /**
+     * Parsuje XML odpoved a normalizuje ji na pole.
+     *
      * @return array<mixed>
      * @throws ParseException
      */
@@ -95,6 +120,8 @@ final class ResponseParser
     }
 
     /**
+     * Normalizuje parsovanou hodnotu na pole.
+     *
      * @param mixed $decoded
      * @return array<mixed>
      */
@@ -108,6 +135,8 @@ final class ResponseParser
     }
 
     /**
+     * Rozbali korenovy uzel `winstrom`, pokud je pritomen.
+     *
      * @param array<mixed> $payload
      * @return array<mixed>
      */
@@ -121,6 +150,8 @@ final class ResponseParser
     }
 
     /**
+     * Overi, ze payload neobsahuje API chybu.
+     *
      * @param array<mixed> $payload
      * @throws ApiErrorException
      */
@@ -172,6 +203,12 @@ final class ResponseParser
         }
     }
 
+    /**
+     * Vyhodnoti ruzne reprezentace neuspechu (`false`, `0`, `no`).
+     *
+     * @param mixed $value Hodnota priznaku uspechu/neuspechu.
+     * @return bool `true`, pokud hodnota reprezentuje neuspech.
+     */
     private function isErrorFlag(mixed $value): bool
     {
         if (is_bool($value)) {
@@ -186,6 +223,8 @@ final class ResponseParser
     }
 
     /**
+     * Hleda chybu vnorene uvnitr pole `results`.
+     *
      * @param array<mixed> $payload
      * @return array<mixed>|null
      */
@@ -212,6 +251,8 @@ final class ResponseParser
     }
 
     /**
+     * Pokusi se z chybove struktury vycist text chyby.
+     *
      * @param mixed $error
      */
     private function extractMessage(mixed $error): ?string
@@ -246,6 +287,8 @@ final class ResponseParser
     }
 
     /**
+     * Pokusi se z chybove struktury vycist kod chyby.
+     *
      * @param mixed $error
      */
     private function extractCode(mixed $error): ?string
@@ -276,6 +319,8 @@ final class ResponseParser
     }
 
     /**
+     * Z payloadu ponecha pouze polozky s textovym klicem.
+     *
      * @param array<mixed> $payload
      * @return array<string, mixed>
      */

@@ -15,12 +15,17 @@ use Psr\Log\LoggerInterface;
 final readonly class FlexiClientFactory
 {
     /**
-     * @param array{baseUrl: string, username: string, password: string, timeout: float} $baseConfig
-     * @param array<string, mixed> $guzzleConfig
+     * Vytvoří factory pro generování FlexiClient instancí.
+     *
+     * @param ClientFactory $clientFactory Factory pro vytvoření HTTP klienta.
+     * @param ResponseParser $responseParser Parser odpovědí z API.
+     * @param array{baseUrl: string, username: string, password: string, timeout: float} $baseConfig Základní konfigurace připojení.
+     * @param array<string, mixed> $guzzleConfig Volitelná konfigurace Guzzle klienta.
      * @param array<string, array{
      *     config: array{baseUrl: string, company: string, username: string, password: string, timeout: float},
      *     guzzle: array<string, mixed>
-     * }> $namedConnections
+     * }> $namedConnections Volitelná pojmenovaná připojení s vlastní konfigurací.
+     * @param LoggerInterface|null $logger Volitelný logger.
      */
     public function __construct(
         private ClientFactory $clientFactory,
@@ -34,13 +39,17 @@ final readonly class FlexiClientFactory
     }
 
     /**
+     * Vytvoří FlexiClient pro zadanou firmu.
+     *
+     * @param string $company Firma, pro kterou se má klient vytvořit.
      * @param array{
      *     baseUrl?: string,
      *     username?: string,
      *     password?: string,
      *     timeout?: float|int
-     * } $overrides
-     * @param array<string, mixed> $guzzle
+     * } $overrides Volitelné přepsání základní konfigurace.
+     * @param array<string, mixed> $guzzle Volitelná konfigurace Guzzle klienta.
+     * @return FlexiClient Nakonfigurovaný klient.
      */
     public function create(string $company, array $overrides = [], array $guzzle = []): FlexiClient
     {
@@ -52,6 +61,13 @@ final readonly class FlexiClientFactory
         return $this->createFromArray($config, $guzzle);
     }
 
+    /**
+     * Vytvoří FlexiClient podle názvu pojmenovaného připojení.
+     *
+     * @param string $name Název pojmenovaného připojení.
+     * @return FlexiClient Nakonfigurovaný klient.
+     * @throws InvalidArgumentException Pokud připojení s daným názvem neexistuje.
+     */
     public function createNamed(string $name): FlexiClient
     {
         $connection = $this->namedConnections[$name] ?? null;
@@ -68,13 +84,21 @@ final readonly class FlexiClientFactory
         return $this->createFromArray($connection['config'], $connection['guzzle']);
     }
 
+    /**
+     * Zjistí, zda existuje pojmenované připojení se zadaným názvem.
+     *
+     * @param string $name Název pojmenovaného připojení.
+     * @return bool True pokud připojení existuje, jinak false.
+     */
     public function hasNamed(string $name): bool
     {
         return isset($this->namedConnections[$name]);
     }
 
     /**
-     * @return list<string>
+     * Vrátí seznam názvů všech dostupných pojmenovaných připojení.
+     *
+     * @return list<string> Seznam názvů pojmenovaných připojení.
      */
     public function names(): array
     {
@@ -96,16 +120,30 @@ final readonly class FlexiClientFactory
      */
     public function createFromArray(array $config, array $guzzle = []): FlexiClient
     {
+        // Převede konfigurační pole na validní objekt FlexiConfig.
         $resolvedConfig = FlexiConfig::fromArray($config);
+
+        // Vytvoří HTTP klienta a spojí globální Guzzle konfiguraci
+        // s konfigurací předanou pro toto konkrétní vytvoření klienta.
         $guzzleClient = $this->clientFactory->createClient(array_replace_recursive($this->guzzleConfig, $guzzle));
+
+        // Připraví builder endpointů pro danou konfiguraci.
         $endpointBuilder = new EndpointBuilder($resolvedConfig);
+
+        // Připraví HTTP transport nad Guzzle klientem.
         $httpTransport = new GuzzleHttpTransport($guzzleClient, $resolvedConfig, $this->logger);
 
+        // Vrátí finální instanci FlexiClient.
         return new FlexiClient($endpointBuilder, $httpTransport, $this->responseParser, $this->logger);
     }
 
     /**
-     * @param array<string, mixed> $baseConfig
+     * Ověří, že základní konfigurace obsahuje všechny povinné klíče
+     * a že ji lze převést na validní instanci FlexiConfig.
+     *
+     * @param array<string, mixed> $baseConfig Základní konfigurace připojení.
+     * @throws InvalidArgumentException Pokud některý povinný konfigurační klíč chybí
+     *                                  nebo pokud je konfigurace neplatná.
      */
     private function assertBaseConfig(array $baseConfig): void
     {

@@ -22,6 +22,11 @@ use Nette\Schema\Schema;
 
 final class FlexiExtension extends CompilerExtension
 {
+    /**
+     * Vrátí schéma konfigurace pro nastavení rozšíření.
+     *
+     * @return Schema Schéma konfigurace pro validaci a zpracování nastavení.
+     */
     public function getConfigSchema(): Schema
     {
         $connectionSchema = Expect::structure([
@@ -48,6 +53,16 @@ final class FlexiExtension extends CompilerExtension
         ]);
     }
 
+    /**
+     * Načte a zaregistruje služby rozšíření do DI kontejneru.
+     *
+     * Podle konfigurace buď:
+     * - nastaví pojmenovaná připojení přes FlexiClientFactory,
+     * - nebo vytvoří jedno základní připojení přímo z hlavní konfigurace.
+     *
+     * @throws \LogicException Pokud je nastavena volba defaultConnection
+     *                         bez definovaných connections.
+     */
     public function loadConfiguration(): void
     {
         $builder = $this->getContainerBuilder();
@@ -126,6 +141,12 @@ final class FlexiExtension extends CompilerExtension
             ]);
     }
 
+    /**
+     * Doplní konfiguraci služeb před finálním sestavením DI kontejneru.
+     *
+     * Nastaví službu ClientFactory do FlexiClientFactory a případně
+     * nakonfiguruje vytvoření Guzzle klienta přes nalezený ClientFactory.
+     */
     public function beforeCompile(): void
     {
         $builder = $this->getContainerBuilder();
@@ -144,7 +165,10 @@ final class FlexiExtension extends CompilerExtension
     }
 
     /**
-     * @return array{baseUrl: string, username: string, password: string, timeout: float}
+     * Vytvoří základní konfiguraci pro vytváření FlexiClient instancí.
+     *
+     * @param object $config Výsledná konfigurace rozšíření.
+     * @return array{baseUrl: string, username: string, password: string, timeout: float} Základní konfigurace připojení.
      */
     private function createBaseConfig(object $config): array
     {
@@ -164,10 +188,13 @@ final class FlexiExtension extends CompilerExtension
     }
 
     /**
+     * Normalizuje pojmenovaná připojení do jednotné struktury.
+     *
+     * @param object $config Výsledná konfigurace rozšíření.
      * @return array<string, array{
      *     config: array{baseUrl: string, company: string, username: string, password: string, timeout: float},
      *     guzzle: array<string, mixed>
-     * }>
+     * }> Normalizovaná pojmenovaná připojení.
      */
     private function normalizeNamedConnections(object $config): array
     {
@@ -204,6 +231,13 @@ final class FlexiExtension extends CompilerExtension
         return $connections;
     }
 
+    /**
+     * Určí název výchozího pojmenovaného připojení.
+     *
+     * @param object $config Výsledná konfigurace rozšíření.
+     * @return string|null Název výchozího připojení, nebo null.
+     * @throws \LogicException Pokud nastavené `defaultConnection` neexistuje v `connections`.
+     */
     private function resolveDefaultConnection(object $config): ?string
     {
         if ($config->connections === []) {
@@ -230,6 +264,13 @@ final class FlexiExtension extends CompilerExtension
         return null;
     }
 
+    /**
+     * Vrátí název služby typu ClientFactory z DI kontejneru.
+     *
+     * @param ContainerBuilder $builder Builder DI kontejneru.
+     * @return string Název nalezené služby typu ClientFactory.
+     * @throws \LogicException Pokud služba neexistuje nebo pokud je nalezeno více služeb tohoto typu.
+     */
     private function resolveClientFactoryServiceName(ContainerBuilder $builder): string
     {
         $serviceNames = array_keys($builder->findByType(ClientFactory::class));
@@ -255,6 +296,14 @@ final class FlexiExtension extends CompilerExtension
         return $serviceNames[0];
     }
 
+    /**
+     * Vrátí definici služby a ověří, že jde o ServiceDefinition.
+     *
+     * @param ContainerBuilder $builder Builder DI kontejneru.
+     * @param string $serviceName Název služby.
+     * @return ServiceDefinition Definice služby.
+     * @throws \LogicException Pokud definice služby není typu ServiceDefinition.
+     */
     private function getServiceDefinition(ContainerBuilder $builder, string $serviceName): ServiceDefinition
     {
         $definition = $builder->getDefinition($serviceName);

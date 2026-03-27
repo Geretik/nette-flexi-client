@@ -15,8 +15,16 @@ use GuzzleHttp\Exception\RequestException;
 use JsonException;
 use Psr\Log\LoggerInterface;
 
+/**
+ * HTTP transport nad Guzzle klientem pro komunikaci s Abra Flexi API.
+ */
 final readonly class GuzzleHttpTransport implements HttpTransportInterface
 {
+    /**
+     * @param ClientInterface $client Guzzle klient pouzity pro HTTP volani.
+     * @param FlexiConfig $config Konfigurace pripojeni a autentizace.
+     * @param LoggerInterface|null $logger Volitelny logger pro diagnostiku.
+     */
     public function __construct(
         private ClientInterface $client,
         private FlexiConfig $config,
@@ -25,6 +33,8 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
     }
 
     /**
+     * Provede HTTP pozadavek a vrati normalizovanou odpoved.
+     *
      * @param array<string, mixed> $options
      * @throws HttpException
      */
@@ -104,6 +114,8 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
     }
 
     /**
+     * Vraci vychozi Guzzle volby pouzite pro vsechny pozadavky.
+     *
      * @return array<string, mixed>
      */
     private function defaultOptions(): array
@@ -120,6 +132,8 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
     }
 
     /**
+     * Rekurzivne zamaskuje citlive hodnoty v poli dat.
+     *
      * @param array<string, mixed> $data
      * @return array<string, mixed>
      */
@@ -163,6 +177,9 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
         return $masked;
     }
 
+    /**
+     * Pokusi se zamaskovat citlive informace v textovem payloadu.
+     */
     private function maskSensitivePayload(string $payload): string
     {
         if (trim($payload) === '') {
@@ -186,6 +203,9 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
         ) ?? $payload;
     }
 
+    /**
+     * Zamaskuje citlive udaje v textu, vcetne URL.
+     */
     private function maskSensitiveText(string $text): string
     {
         $maskedText = preg_replace_callback(
@@ -197,6 +217,9 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
         return $this->maskSensitivePayload($maskedText);
     }
 
+    /**
+     * Pokud je payload validni JSON, vrati jeho zamaskovanou variantu.
+     */
     private function maskJsonPayload(string $payload): ?string
     {
         $trimmedPayload = ltrim($payload);
@@ -214,6 +237,9 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
         }
     }
 
+    /**
+     * Pokud je payload validni XML, vrati jeho zamaskovanou variantu.
+     */
     private function maskXmlPayload(string $payload): ?string
     {
         $trimmedPayload = ltrim($payload);
@@ -238,6 +264,9 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
         return $masked !== false ? $masked : null;
     }
 
+    /**
+     * Rekurzivne zamaskuje citlive XML elementy a atributy.
+     */
     private function maskXmlNode(DOMNode $node): void
     {
         if (!$node instanceof DOMElement) {
@@ -265,6 +294,9 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
         }
     }
 
+    /**
+     * Rekurzivne zamaskuje citlive hodnoty podle nazvu klice.
+     */
     private function maskSensitiveValue(mixed $value, ?string $key = null): mixed
     {
         if ($key !== null && $this->isSensitiveKey(strtolower($key))) {
@@ -286,6 +318,9 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
         return $masked;
     }
 
+    /**
+     * Zamaskuje citlive casti URL (prihlasovaci udaje a query parametry).
+     */
     private function maskSensitiveUrl(string $url): string
     {
         $maskedUrl = preg_replace_callback(
@@ -320,6 +355,9 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
         return substr($maskedUrl, 0, $queryStart + 1) . $maskedQuery . substr($maskedUrl, $fragmentStart);
     }
 
+    /**
+     * Zamaskuje citlive query parametry v URL dotazu.
+     */
     private function maskSensitiveQuery(string $query): string
     {
         $pairs = explode('&', $query);
@@ -340,16 +378,25 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
         return implode('&', $pairs);
     }
 
+    /**
+     * Urci, zda dany klic pravdepodobne obsahuje payload.
+     */
     private function isPayloadKey(string $key): bool
     {
         return in_array($key, ['body', 'responsebody'], true);
     }
 
+    /**
+     * Urci, zda dany klic pravdepodobne obsahuje URL.
+     */
     private function isUrlKey(string $key): bool
     {
         return in_array($key, ['url', 'uri'], true);
     }
 
+    /**
+     * Zkontroluje, zda query klic obsahuje citlivy segment.
+     */
     private function isSensitiveQueryKey(string $key): bool
     {
         $segments = preg_split('/[\[\].]+/', strtolower($key), -1, PREG_SPLIT_NO_EMPTY);
@@ -366,6 +413,9 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
         return false;
     }
 
+    /**
+     * Urci, zda je klic povazovan za citlivy.
+     */
     private function isSensitiveKey(string $key): bool
     {
         return in_array($key, [

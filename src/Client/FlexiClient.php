@@ -28,8 +28,15 @@ final readonly class FlexiClient
     }
 
     /**
-     * @param array<string, scalar|null> $query
-     * @return array<mixed>
+     * Provede GET požadavek na zadanou agendu Flexi API.
+     *
+     * Pokud je vyplněno $recordId, načte konkrétní záznam.
+     * Pokud je $recordId null, načte seznam záznamů.
+     *
+     * @param string $agenda Název agendy / endpointu pro získání dat.
+     * @param string|null $recordId Volitelné ID konkrétního záznamu, jinak se načítá celý seznam.
+     * @param array<string, scalar|null> $query Parametry do URL, např. filtrování, stránkování nebo upřesnění odpovědi.
+     * @return array<mixed> Naparsovaná odpověď z API.
      */
     public function get(string $agenda, ?string $recordId = null, array $query = []): array
     {
@@ -37,9 +44,12 @@ final readonly class FlexiClient
     }
 
     /**
-     * @param array<mixed>|string $payload
-     * @param array<string, scalar|null> $query
-     * @return array<mixed>
+     * Provede POST požadavek na zadanou agendu Flexi API.
+     *
+     * @param string $agenda Název agendy / endpointu.
+     * @param array<mixed>|string $payload Data v těle požadavku.
+     * @param array<string, scalar|null> $query Volitelné parametry do URL.
+     * @return array<mixed> Naparsovaná odpověď z API.
      */
     public function post(string $agenda, array|string $payload, array $query = []): array
     {
@@ -49,9 +59,13 @@ final readonly class FlexiClient
     }
 
     /**
-     * @param array<mixed>|string $payload
-     * @param array<string, scalar|null> $query
-     * @return array<mixed>
+     * Provede PUT požadavek na zadanou agendu Flexi API.
+     *
+     * @param string $agenda Název agendy / endpointu.
+     * @param string $recordId ID konkrétního záznamu, který se má upravit.
+     * @param array<mixed>|string $payload Data v těle požadavku.
+     * @param array<string, scalar|null> $query Volitelné parametry do URL.
+     * @return array<mixed> Naparsovaná odpověď z API.
      */
     public function put(string $agenda, string $recordId, array|string $payload, array $query = []): array
     {
@@ -61,8 +75,12 @@ final readonly class FlexiClient
     }
 
     /**
-     * @param array<string, scalar|null> $query
-     * @return array<mixed>
+     * Provede DELETE požadavek na zadanou agendu Flexi API.
+     *
+     * @param string $agenda Název agendy / endpointu.
+     * @param string $recordId ID konkrétního záznamu, který se má smazat.
+     * @param array<string, scalar|null> $query Volitelné parametry do URL.
+     * @return array<mixed> Naparsovaná odpověď z API.
      */
     public function delete(string $agenda, string $recordId, array $query = []): array
     {
@@ -70,9 +88,15 @@ final readonly class FlexiClient
     }
 
     /**
-     * @param array<string, scalar|null> $query
-     * @param array<string, mixed> $options
-     * @return array<mixed>
+     * Provede HTTP požadavek na zadanou agendu Flexi API a vrátí naparsovanou odpověď.
+     *
+     * @param string $method HTTP metoda požadavku, např. GET, POST, PUT nebo DELETE.
+     * @param string $agenda Název agendy / endpointu.
+     * @param string|null $recordId Volitelné ID konkrétního záznamu, jinak se pracuje nad celou agendou.
+     * @param array<string, scalar|null> $query Volitelné parametry do URL.
+     * @param array<string, mixed> $options Volitelné HTTP options, např. headers nebo body požadavku.
+     * @param string $format Formát endpointu / odpovědi, typicky json nebo xml.
+     * @return array<mixed> Naparsovaná odpověď z API.
      */
     private function request(
         string $method,
@@ -107,8 +131,14 @@ final readonly class FlexiClient
     }
 
     /**
-     * @param array<mixed>|string $payload
+     * Připraví payload a HTTP options pro odeslání požadavku do Flexi API.
+     *
+     * @param string $agenda Název agendy / endpointu.
+     * @param array<mixed>|string $payload Data odesílaná v těle požadavku.
+     *                                     String se odešle přímo,
+     *                                     pole se normalizuje a zakóduje do JSON.
      * @return array{format: string, options: array<string, mixed>}
+     *         Připravený formát payloadu a HTTP options pro request.
      */
     private function createPayloadOptions(string $agenda, array|string $payload): array
     {
@@ -147,8 +177,11 @@ final readonly class FlexiClient
     }
 
     /**
-     * @param array<mixed> $payload
-     * @return array<mixed>
+     * Doplní payload do JSON struktury očekávané Flexi API.
+     *
+     * @param string $agenda Název agendy / endpointu.
+     * @param array<mixed> $payload Data pro odeslání.
+     * @return array<mixed> Payload obalený do správné struktury s root uzlem 'winstrom'.
      */
     private function normalizeJsonPayload(string $agenda, array $payload): array
     {
@@ -169,6 +202,12 @@ final readonly class FlexiClient
         ];
     }
 
+    /**
+     * Rozpozná, zda je payload ve formátu XML nebo JSON.
+     *
+     * @param string $payload Obsah request body jako text.
+     * @return string Formát payloadu, typicky 'xml' nebo 'json'.
+     */
     private function detectPayloadFormat(string $payload): string
     {
         $trimmedPayload = ltrim($payload);
@@ -180,6 +219,12 @@ final readonly class FlexiClient
         return self::FORMAT_JSON;
     }
 
+    /**
+     * Vrátí Content-Type hlavičku podle zvoleného formátu.
+     *
+     * @param string $format Formát payloadu, typicky 'xml' nebo 'json'.
+     * @return string Odpovídající MIME typ pro HTTP hlavičku.
+     */
     private function contentTypeForFormat(string $format): string
     {
         return match ($format) {
@@ -189,7 +234,9 @@ final readonly class FlexiClient
     }
 
     /**
-     * Flexi often returns structured API validation errors in 4xx bodies.
+     * Zkusí z těla HTTP chyby vytěžit detailnější API chybu.
+     *
+     * @param HttpException $exception HTTP výjimka s odpovědí serveru.
      */
     private function rethrowApiErrorFromHttpException(HttpException $exception): void
     {
@@ -205,6 +252,12 @@ final readonly class FlexiClient
         }
     }
 
+    /**
+     * Vrátí hodnotu hlavičky Content-Type z HTTP odpovědi.
+     *
+     * @param HttpResponse $response HTTP odpověď.
+     * @return string|null Hodnota Content-Type, nebo null pokud hlavička neexistuje.
+     */
     private function extractContentType(HttpResponse $response): ?string
     {
         foreach ($response->headers as $name => $values) {
@@ -216,6 +269,13 @@ final readonly class FlexiClient
         return null;
     }
 
+    /**
+     * Zamaskuje citlivé hodnoty v datech, zejména před logováním.
+     *
+     * @param mixed $value Hodnota ke kontrole.
+     * @param string|null $key Volitelný název klíče pro určení citlivosti.
+     * @return mixed Původní nebo zamaskovaná hodnota.
+     */
     private function maskSensitiveValue(mixed $value, ?string $key = null): mixed
     {
         if ($key !== null && $this->isSensitiveContextKey($key)) {
@@ -237,6 +297,12 @@ final readonly class FlexiClient
         return $masked;
     }
 
+    /**
+     * Zjistí, zda klíč nebo některá jeho část označuje citlivý údaj.
+     *
+     * @param string $key Název klíče ke kontrole.
+     * @return bool True, pokud je klíč citlivý, jinak false.
+     */
     private function isSensitiveContextKey(string $key): bool
     {
         $segments = preg_split('/[\[\].]+/', strtolower($key), -1, PREG_SPLIT_NO_EMPTY);
@@ -253,6 +319,12 @@ final readonly class FlexiClient
         return false;
     }
 
+    /**
+     * Zjistí, zda název klíče odpovídá citlivému údaji.
+     *
+     * @param string $key Název klíče ke kontrole.
+     * @return bool True, pokud je klíč citlivý, jinak false.
+     */
     private function isSensitiveKey(string $key): bool
     {
         return in_array($key, [
