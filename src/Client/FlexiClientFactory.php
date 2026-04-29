@@ -153,9 +153,7 @@ final readonly class FlexiClientFactory
             }
         }
 
-        FlexiConfig::fromArray([
-            ...$baseConfig,
-            'company' => '__base__',
-        ]);
+        /** @var array{baseUrl: string, username: string, password: string, timeout?: float|int} $baseConfig */
+        FlexiConfig::assertConnectionDefaults($baseConfig);
     }
 }

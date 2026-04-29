@@ -10,103 +10,132 @@ use Acme\AbraFlexi\Exception\HttpException;
 use Acme\AbraFlexi\Exception\ParseException;
 use Acme\AbraFlexi\Http\HttpResponse;
 use Acme\AbraFlexi\Http\HttpTransportInterface;
+use Acme\AbraFlexi\Payload\PayloadEncoder;
 use Acme\AbraFlexi\Response\ResponseParser;
-use JsonException;
+use Acme\AbraFlexi\Sensitive\SensitiveDataMasker;
 use Psr\Log\LoggerInterface;
 
+/**
+ * Verejne API knihovny - tenky orchestrator nad jednotlivymi vrstvami.
+ *
+ * Klient sam neresi:
+ *  - skladani URL (deleguje na {@see EndpointBuilder}),
+ *  - serializaci payloadu (deleguje na {@see PayloadEncoder}),
+ *  - HTTP komunikaci (deleguje na {@see HttpTransportInterface}),
+ *  - parsovani odpovedi a detekci chyb (deleguje na {@see ResponseParser}),
+ *  - maskovani citlivych dat v logu (deleguje na {@see SensitiveDataMasker}).
+ *
+ * Diky tomu zustava telo metod kratke, snadno citelne a kazda zavislost
+ * je samostatne testovatelna.
+ */
 final readonly class FlexiClient
 {
-    private const FORMAT_JSON = 'json';
-    private const FORMAT_XML = 'xml';
+    private SensitiveDataMasker $masker;
+    private PayloadEncoder $payloadEncoder;
 
+    /**
+     * @param EndpointBuilder $endpointBuilder Builder pro skladani URL endpointu.
+     * @param HttpTransportInterface $httpTransport HTTP transportni vrstva.
+     * @param ResponseParser $responseParser Parser odpovedi vcetne detekce chyb.
+     * @param LoggerInterface|null $logger Volitelny PSR logger pro business chyby.
+     * @param PayloadEncoder|null $payloadEncoder Volitelna instance encoderu;
+     *                                            pokud chybi, pouzije se vychozi.
+     * @param SensitiveDataMasker|null $masker Volitelna instance maskeru;
+     *                                         pokud chybi, pouzije se vychozi.
+     */
     public function __construct(
         private EndpointBuilder $endpointBuilder,
         private HttpTransportInterface $httpTransport,
         private ResponseParser $responseParser,
         private ?LoggerInterface $logger = null,
+        ?PayloadEncoder $payloadEncoder = null,
+        ?SensitiveDataMasker $masker = null,
     ) {
+        $this->payloadEncoder = $payloadEncoder ?? new PayloadEncoder();
+        $this->masker = $masker ?? new SensitiveDataMasker();
     }
 
     /**
-     * Provede GET požadavek na zadanou agendu Flexi API.
+     * Provede GET pozadavek na zadanou agendu Flexi API.
      *
-     * Pokud je vyplněno $recordId, načte konkrétní záznam.
-     * Pokud je $recordId null, načte seznam záznamů.
+     * Pokud je vyplneno $recordId, nacte konkretni zaznam,
+     * jinak nacte seznam zaznamu.
      *
-     * @param string $agenda Název agendy / endpointu pro získání dat.
-     * @param string|null $recordId Volitelné ID konkrétního záznamu, jinak se načítá celý seznam.
-     * @param array<string, scalar|null> $query Parametry do URL, např. filtrování, stránkování nebo upřesnění odpovědi.
-     * @return array<mixed> Naparsovaná odpověď z API.
+     * @param string $agenda Nazev agendy / endpointu.
+     * @param string|null $recordId Volitelne ID konkretniho zaznamu.
+     * @param array<string, scalar|null> $query Parametry do URL.
+     * @return array<mixed> Naparsovana odpoved z API.
      */
     public function get(string $agenda, ?string $recordId = null, array $query = []): array
     {
-        return $this->request('GET', $agenda, $recordId, $query, [], self::FORMAT_JSON);
+        return $this->request('GET', $agenda, $recordId, $query, [], PayloadEncoder::FORMAT_JSON);
     }
 
     /**
-     * Provede POST požadavek na zadanou agendu Flexi API.
+     * Provede POST pozadavek na zadanou agendu Flexi API.
      *
-     * @param string $agenda Název agendy / endpointu.
-     * @param array<mixed>|string $payload Data v těle požadavku.
-     * @param array<string, scalar|null> $query Volitelné parametry do URL.
-     * @return array<mixed> Naparsovaná odpověď z API.
+     * @param string $agenda Nazev agendy / endpointu.
+     * @param array<mixed>|string $payload Data v tele pozadavku.
+     * @param array<string, scalar|null> $query Volitelne parametry do URL.
+     * @return array<mixed> Naparsovana odpoved z API.
      */
     public function post(string $agenda, array|string $payload, array $query = []): array
     {
-        $preparedPayload = $this->createPayloadOptions($agenda, $payload);
+        $encoded = $this->payloadEncoder->encode($agenda, $payload);
 
-        return $this->request('POST', $agenda, null, $query, $preparedPayload['options'], $preparedPayload['format']);
+        return $this->request('POST', $agenda, null, $query, $this->payloadOptions($encoded), $encoded['format']);
     }
 
     /**
-     * Provede PUT požadavek na zadanou agendu Flexi API.
+     * Provede PUT pozadavek na zadanou agendu Flexi API.
      *
-     * @param string $agenda Název agendy / endpointu.
-     * @param string $recordId ID konkrétního záznamu, který se má upravit.
-     * @param array<mixed>|string $payload Data v těle požadavku.
-     * @param array<string, scalar|null> $query Volitelné parametry do URL.
-     * @return array<mixed> Naparsovaná odpověď z API.
+     * @param string $agenda Nazev agendy / endpointu.
+     * @param string $recordId ID konkretniho zaznamu k uprave.
+     * @param array<mixed>|string $payload Data v tele pozadavku.
+     * @param array<string, scalar|null> $query Volitelne parametry do URL.
+     * @return array<mixed> Naparsovana odpoved z API.
      */
     public function put(string $agenda, string $recordId, array|string $payload, array $query = []): array
     {
-        $preparedPayload = $this->createPayloadOptions($agenda, $payload);
+        $encoded = $this->payloadEncoder->encode($agenda, $payload);
 
-        return $this->request('PUT', $agenda, $recordId, $query, $preparedPayload['options'], $preparedPayload['format']);
+        return $this->request('PUT', $agenda, $recordId, $query, $this->payloadOptions($encoded), $encoded['format']);
     }
 
     /**
-     * Provede DELETE požadavek na zadanou agendu Flexi API.
+     * Provede DELETE pozadavek na zadanou agendu Flexi API.
      *
-     * @param string $agenda Název agendy / endpointu.
-     * @param string $recordId ID konkrétního záznamu, který se má smazat.
-     * @param array<string, scalar|null> $query Volitelné parametry do URL.
-     * @return array<mixed> Naparsovaná odpověď z API.
+     * @param string $agenda Nazev agendy / endpointu.
+     * @param string $recordId ID konkretniho zaznamu ke smazani.
+     * @param array<string, scalar|null> $query Volitelne parametry do URL.
+     * @return array<mixed> Naparsovana odpoved z API.
      */
     public function delete(string $agenda, string $recordId, array $query = []): array
     {
-        return $this->request('DELETE', $agenda, $recordId, $query, [], self::FORMAT_JSON);
+        return $this->request('DELETE', $agenda, $recordId, $query, [], PayloadEncoder::FORMAT_JSON);
     }
 
     /**
-     * Provede HTTP požadavek na zadanou agendu Flexi API a vrátí naparsovanou odpověď.
+     * Provede HTTP pozadavek na agendu Flexi API a vrati naparsovanou odpoved.
      *
-     * @param string $method HTTP metoda požadavku, např. GET, POST, PUT nebo DELETE.
-     * @param string $agenda Název agendy / endpointu.
-     * @param string|null $recordId Volitelné ID konkrétního záznamu, jinak se pracuje nad celou agendou.
-     * @param array<string, scalar|null> $query Volitelné parametry do URL.
-     * @param array<string, mixed> $options Volitelné HTTP options, např. headers nebo body požadavku.
-     * @param string $format Formát endpointu / odpovědi, typicky json nebo xml.
-     * @return array<mixed> Naparsovaná odpověď z API.
+     * Na hranici transportni vrstvy se HTTP chyba pokusi rozsifrovat na
+     * strukturovanou {@see ApiErrorException} - aplikace pak dostane stejnou
+     * vyjimku jako pri 200 odpovedi s chybovym payloadem.
+     *
+     * @param array<string, scalar|null> $query
+     * @param array<string, mixed> $options
+     * @return array<mixed>
      */
     private function request(
         string $method,
         string $agenda,
         ?string $recordId,
         array $query,
-        array $options = [],
-        string $format = self::FORMAT_JSON,
+        array $options,
+        string $format,
     ): array {
         $url = $this->endpointBuilder->agenda($agenda, $recordId, $query, $format);
+
         try {
             $response = $this->httpTransport->request($method, $url, $options);
         } catch (HttpException $exception) {
@@ -117,126 +146,61 @@ final readonly class FlexiClient
         try {
             return $this->responseParser->parse($response->body, $this->extractContentType($response));
         } catch (ApiErrorException $exception) {
-            $this->logger?->warning('Flexi API business error.', [
-                'method' => $method,
-                'agenda' => $agenda,
-                'recordId' => $recordId,
-                'query' => $this->maskSensitiveValue($query),
-                'errorCode' => $exception->getErrorCode(),
-                'details' => $this->maskSensitiveValue($exception->getDetails()),
-            ]);
-
+            $this->logBusinessApiError($method, $agenda, $recordId, $query, $exception);
             throw $exception;
         }
     }
 
     /**
-     * Připraví payload a HTTP options pro odeslání požadavku do Flexi API.
+     * Sestavi Guzzle options pro odeslani zakodovaneho payloadu.
      *
-     * @param string $agenda Název agendy / endpointu.
-     * @param array<mixed>|string $payload Data odesílaná v těle požadavku.
-     *                                     String se odešle přímo,
-     *                                     pole se normalizuje a zakóduje do JSON.
-     * @return array{format: string, options: array<string, mixed>}
-     *         Připravený formát payloadu a HTTP options pro request.
+     * @param array{format: string, contentType: string, body: string} $encoded
+     * @return array<string, mixed>
      */
-    private function createPayloadOptions(string $agenda, array|string $payload): array
+    private function payloadOptions(array $encoded): array
     {
-        if (is_string($payload)) {
-            $format = $this->detectPayloadFormat($payload);
-            $contentType = $this->contentTypeForFormat($format);
-
-            return [
-                'format' => $format,
-                'options' => [
-                    'headers' => [
-                        'Accept' => $contentType,
-                        'Content-Type' => $contentType,
-                    ],
-                    'body' => $payload,
-                ],
-            ];
-        }
-
-        try {
-            $encodedPayload = json_encode($this->normalizeJsonPayload($agenda, $payload), JSON_THROW_ON_ERROR);
-        } catch (JsonException $exception) {
-            throw new ParseException('Request payload could not be encoded to JSON.', $exception);
-        }
-
         return [
-            'format' => self::FORMAT_JSON,
-            'options' => [
-                'headers' => [
-                    'Accept' => 'application/json',
-                    'Content-Type' => 'application/json',
-                ],
-                'body' => $encodedPayload,
+            'headers' => [
+                'Accept' => $encoded['contentType'],
+                'Content-Type' => $encoded['contentType'],
             ],
+            'body' => $encoded['body'],
         ];
     }
 
     /**
-     * Doplní payload do JSON struktury očekávané Flexi API.
+     * Zalogovani business chyby vracene API. Citlive hodnoty se pred logem
+     * automaticky maskuji pres {@see SensitiveDataMasker}.
      *
-     * @param string $agenda Název agendy / endpointu.
-     * @param array<mixed> $payload Data pro odeslání.
-     * @return array<mixed> Payload obalený do správné struktury s root uzlem 'winstrom'.
+     * @param array<string, scalar|null> $query
      */
-    private function normalizeJsonPayload(string $agenda, array $payload): array
-    {
-        if (isset($payload['winstrom']) && is_array($payload['winstrom'])) {
-            return $payload;
-        }
-
-        $segments = explode('/', trim($agenda, '/'));
-        $rootNode = end($segments);
-        if (!is_string($rootNode) || $rootNode === '') {
-            throw new ParseException('Agenda must not be empty when preparing request payload.');
-        }
-
-        return [
-            'winstrom' => [
-                $rootNode => $payload,
-            ],
-        ];
+    private function logBusinessApiError(
+        string $method,
+        string $agenda,
+        ?string $recordId,
+        array $query,
+        ApiErrorException $exception,
+    ): void {
+        $this->logger?->warning('Flexi API business error.', [
+            'method' => $method,
+            'agenda' => $agenda,
+            'recordId' => $recordId,
+            'query' => $this->masker->mask($query),
+            'errorCode' => $exception->getErrorCode(),
+            'details' => $this->masker->mask($exception->getDetails()),
+        ]);
     }
 
     /**
-     * Rozpozná, zda je payload ve formátu XML nebo JSON.
+     * Zkusi z tela HTTP chyby vytezit detailnejsi API chybu.
      *
-     * @param string $payload Obsah request body jako text.
-     * @return string Formát payloadu, typicky 'xml' nebo 'json'.
-     */
-    private function detectPayloadFormat(string $payload): string
-    {
-        $trimmedPayload = ltrim($payload);
-
-        if (str_starts_with($trimmedPayload, '<')) {
-            return self::FORMAT_XML;
-        }
-
-        return self::FORMAT_JSON;
-    }
-
-    /**
-     * Vrátí Content-Type hlavičku podle zvoleného formátu.
+     * Pokud Flexi v ramci 4xx/5xx odpovedi vraci strukturovany payload s polem
+     * `errors`, parser pri jeho parsovani primo vyhodi {@see ApiErrorException}.
+     * Tu propaguje volajici metoda, takze aplikace dostane bohatsi chybu nez
+     * pouhou {@see HttpException}. Jine vysledky parseru zde nezajimaji - jdou
+     * stranou a `request()` puvodni `HttpException` rethrowne.
      *
-     * @param string $format Formát payloadu, typicky 'xml' nebo 'json'.
-     * @return string Odpovídající MIME typ pro HTTP hlavičku.
-     */
-    private function contentTypeForFormat(string $format): string
-    {
-        return match ($format) {
-            self::FORMAT_XML => 'application/xml',
-            default => 'application/json',
-        };
-    }
-
-    /**
-     * Zkusí z těla HTTP chyby vytěžit detailnější API chybu.
-     *
-     * @param HttpException $exception HTTP výjimka s odpovědí serveru.
+     * @throws ApiErrorException Pokud telo HTTP odpovedi obsahuje API chybu.
      */
     private function rethrowApiErrorFromHttpException(HttpException $exception): void
     {
@@ -247,16 +211,15 @@ final readonly class FlexiClient
 
         try {
             $this->responseParser->parse($responseBody);
+        } catch (ApiErrorException $apiError) {
+            throw $apiError;
         } catch (ParseException) {
-            return;
+            // Telo neni validni JSON/XML - drzime se puvodni HttpException.
         }
     }
 
     /**
-     * Vrátí hodnotu hlavičky Content-Type z HTTP odpovědi.
-     *
-     * @param HttpResponse $response HTTP odpověď.
-     * @return string|null Hodnota Content-Type, nebo null pokud hlavička neexistuje.
+     * Vrati hodnotu hlavicky Content-Type z HTTP odpovedi.
      */
     private function extractContentType(HttpResponse $response): ?string
     {
@@ -267,82 +230,5 @@ final readonly class FlexiClient
         }
 
         return null;
-    }
-
-    /**
-     * Zamaskuje citlivé hodnoty v datech, zejména před logováním.
-     *
-     * @param mixed $value Hodnota ke kontrole.
-     * @param string|null $key Volitelný název klíče pro určení citlivosti.
-     * @return mixed Původní nebo zamaskovaná hodnota.
-     */
-    private function maskSensitiveValue(mixed $value, ?string $key = null): mixed
-    {
-        if ($key !== null && $this->isSensitiveContextKey($key)) {
-            return '***';
-        }
-
-        if (!is_array($value)) {
-            return $value;
-        }
-
-        $masked = [];
-        foreach ($value as $nestedKey => $nestedValue) {
-            $masked[$nestedKey] = $this->maskSensitiveValue(
-                $nestedValue,
-                is_string($nestedKey) ? $nestedKey : null,
-            );
-        }
-
-        return $masked;
-    }
-
-    /**
-     * Zjistí, zda klíč nebo některá jeho část označuje citlivý údaj.
-     *
-     * @param string $key Název klíče ke kontrole.
-     * @return bool True, pokud je klíč citlivý, jinak false.
-     */
-    private function isSensitiveContextKey(string $key): bool
-    {
-        $segments = preg_split('/[\[\].]+/', strtolower($key), -1, PREG_SPLIT_NO_EMPTY);
-        if ($segments === false || $segments === []) {
-            return $this->isSensitiveKey(strtolower($key));
-        }
-
-        foreach ($segments as $segment) {
-            if ($this->isSensitiveKey($segment)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Zjistí, zda název klíče odpovídá citlivému údaji.
-     *
-     * @param string $key Název klíče ke kontrole.
-     * @return bool True, pokud je klíč citlivý, jinak false.
-     */
-    private function isSensitiveKey(string $key): bool
-    {
-        return in_array($key, [
-            'password',
-            'passwd',
-            'authorization',
-            'proxy-authorization',
-            'token',
-            'api_key',
-            'apikey',
-            'api-key',
-            'secret',
-            'cookie',
-            'set-cookie',
-        ], true)
-            || str_contains($key, 'token')
-            || str_contains($key, 'secret')
-            || str_contains($key, 'authorization')
-            || str_contains($key, 'cookie');
     }
 }

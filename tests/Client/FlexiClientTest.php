@@ -48,9 +48,10 @@ final class FlexiClientTest extends TestCase
         self::assertSame(['success' => 'true', 'results' => [['id' => '123']]], $result);
         self::assertSame('POST', $transport->lastMethod);
         self::assertSame('https://demo.flexibee.eu/c/demo-company/adresar.json', $transport->lastUrl);
-        self::assertSame('application/json', $transport->lastOptions['headers']['Accept']);
-        self::assertSame('application/json', $transport->lastOptions['headers']['Content-Type']);
-        self::assertSame('{"winstrom":{"adresar":{"kod":"ABC"}}}', $transport->lastOptions['body']);
+        $headers = $transport->recordedHeaders();
+        self::assertSame('application/json', $headers['Accept'] ?? null);
+        self::assertSame('application/json', $headers['Content-Type'] ?? null);
+        self::assertSame('{"winstrom":{"adresar":{"kod":"ABC"}}}', $transport->recordedBody());
     }
 
     public function testPutUsesRecordIdInEndpoint(): void
@@ -65,7 +66,7 @@ final class FlexiClientTest extends TestCase
         self::assertSame(['success' => 'true'], $result);
         self::assertSame('PUT', $transport->lastMethod);
         self::assertSame('https://demo.flexibee.eu/c/demo-company/adresar/42.json', $transport->lastUrl);
-        self::assertSame('{"winstrom":{"adresar":{"nazev":"Updated"}}}', $transport->lastOptions['body']);
+        self::assertSame('{"winstrom":{"adresar":{"nazev":"Updated"}}}', $transport->recordedBody());
     }
 
     public function testDeleteReturnsEmptyArrayForEmptyBody(): void
@@ -93,8 +94,9 @@ final class FlexiClientTest extends TestCase
 
         self::assertSame(['success' => 'true'], $result);
         self::assertSame('https://demo.flexibee.eu/c/demo-company/adresar.xml', $transport->lastUrl);
-        self::assertSame('application/xml', $transport->lastOptions['headers']['Accept']);
-        self::assertSame('application/xml', $transport->lastOptions['headers']['Content-Type']);
+        $headers = $transport->recordedHeaders();
+        self::assertSame('application/xml', $headers['Accept'] ?? null);
+        self::assertSame('application/xml', $headers['Content-Type'] ?? null);
     }
 
     public function testPostThrowsParseExceptionForNonEncodablePayload(): void
@@ -149,7 +151,9 @@ final class FlexiClientTest extends TestCase
             self::assertSame('adresar', $logger->records[0]['context']['agenda']);
             self::assertSame(['token' => '***', 'detail' => 'full'], $logger->records[0]['context']['query']);
             self::assertSame('INVALID', $logger->records[0]['context']['errorCode']);
-            self::assertSame('***', $logger->records[0]['context']['details']['password']);
+            $details = $logger->records[0]['context']['details'] ?? null;
+            self::assertIsArray($details);
+            self::assertSame('***', $details['password'] ?? null);
             self::assertStringNotContainsString(
                 'secret-password',
                 json_encode($logger->records[0]['context'], JSON_THROW_ON_ERROR),
@@ -203,6 +207,36 @@ final class InMemoryTransport implements HttpTransportInterface
         $this->lastOptions = $options;
 
         return $this->response;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function recordedHeaders(): array
+    {
+        $headers = $this->lastOptions['headers'] ?? null;
+        if (!is_array($headers)) {
+            throw new \RuntimeException('Recorded request does not contain headers.');
+        }
+
+        $normalized = [];
+        foreach ($headers as $name => $value) {
+            if (is_string($name) && is_string($value)) {
+                $normalized[$name] = $value;
+            }
+        }
+
+        return $normalized;
+    }
+
+    public function recordedBody(): string
+    {
+        $body = $this->lastOptions['body'] ?? null;
+        if (!is_string($body)) {
+            throw new \RuntimeException('Recorded request does not contain a string body.');
+        }
+
+        return $body;
     }
 }
 
@@ -298,9 +332,26 @@ final class InMemoryLogger implements LoggerInterface
     public function log($level, Stringable|string $message, array $context = []): void
     {
         $this->records[] = [
-            'level' => (string) $level,
+            'level' => $this->normalizeLevel($level),
             'message' => (string) $message,
             'context' => $context,
         ];
+    }
+
+    private function normalizeLevel(mixed $level): string
+    {
+        if (is_string($level)) {
+            return $level;
+        }
+
+        if (is_int($level) || is_float($level) || is_bool($level)) {
+            return (string) $level;
+        }
+
+        if ($level instanceof Stringable) {
+            return (string) $level;
+        }
+
+        return get_debug_type($level);
     }
 }

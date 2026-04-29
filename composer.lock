@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "6abf0c33be22b5da5e3c9706ac44d956",
+    "content-hash": "aba8a408dccaa588d2149fc05b64d84b",
     "packages": [
         {
             "name": "contributte/guzzlette",
@@ -3049,8 +3049,8 @@
     "prefer-stable": false,
     "prefer-lowest": false,
     "platform": {
-        "php": "^8.4"
+        "php": "^8.2"
     },
     "platform-dev": {},
-    "plugin-api-version": "2.9.0"
+    "plugin-api-version": "2.6.0"
 }

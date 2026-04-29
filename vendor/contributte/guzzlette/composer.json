@@ -1,0 +1,61 @@
+{
+  "name": "contributte/guzzlette",
+  "description": "Guzzle integration into Nette Framework",
+  "keywords": [
+    "nette",
+    "guzzle"
+  ],
+  "type": "library",
+  "license": "MIT",
+  "homepage": "https://github.com/contributte/guzzlette",
+  "authors": [
+    {
+      "name": "Milan Felix Šulc",
+      "homepage": "https://f3l1x.io"
+    },
+    {
+      "name": "Martin Macho",
+      "email": "matyxcz@gmail.com"
+    }
+  ],
+  "require": {
+    "php": ">=8.2",
+    "guzzlehttp/guzzle": "^7.5.0",
+    "nette/di": "^3.1.2",
+    "nette/utils": "^3.2.8 || ^4.0.0",
+    "tracy/tracy": "^2.9.5"
+  },
+  "require-dev": {
+    "mockery/mockery": "^1.5.1",
+    "contributte/tester": "~0.4.0",
+    "contributte/qa": "~0.4.0",
+    "phpstan/phpstan": "^1.9.4",
+    "phpstan/phpstan-deprecation-rules": "^1.1.1",
+    "phpstan/phpstan-nette": "^1.2.0",
+    "phpstan/phpstan-strict-rules": "^1.4.4"
+  },
+  "autoload": {
+    "psr-4": {
+      "Contributte\\Guzzlette\\": "src"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Tests\\": "tests"
+    }
+  },
+  "minimum-stability": "dev",
+  "prefer-stable": true,
+  "config": {
+    "sort-packages": true,
+    "allow-plugins": {
+      "dealerdirect/phpcodesniffer-composer-installer": true,
+      "phpstan/extension-installer": true
+    }
+  },
+  "extra": {
+    "branch-alias": {
+      "dev-master": "3.4.x-dev"
+    }
+  }
+}

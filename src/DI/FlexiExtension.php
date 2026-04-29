@@ -20,6 +20,26 @@ use Nette\DI\Definitions\ServiceDefinition;
 use Nette\Schema\Expect;
 use Nette\Schema\Schema;
 
+/**
+ * @phpstan-type ConnectionInput array{
+ *     company: string,
+ *     baseUrl: string|null,
+ *     username: string|null,
+ *     password: string|null,
+ *     timeout: float|null,
+ *     guzzle: array<string, mixed>|null
+ * }
+ * @phpstan-type ExtensionConfig array{
+ *     baseUrl: string,
+ *     company: string,
+ *     username: string,
+ *     password: string,
+ *     timeout: float,
+ *     guzzle: array<string, mixed>,
+ *     defaultConnection: string|null,
+ *     connections: array<string, string|ConnectionInput>
+ * }
+ */
 final class FlexiExtension extends CompilerExtension
 {
     /**
@@ -35,7 +55,7 @@ final class FlexiExtension extends CompilerExtension
             'username' => Expect::string()->nullable()->default(null),
             'password' => Expect::string()->nullable()->default(null),
             'timeout' => Expect::float()->nullable()->default(null),
-            'guzzle' => Expect::array()->nullable()->default(null),
+            'guzzle' => Expect::anyOf(Expect::array(), Expect::null())->default(null),
         ]);
 
         return Expect::structure([
@@ -66,7 +86,7 @@ final class FlexiExtension extends CompilerExtension
     public function loadConfiguration(): void
     {
         $builder = $this->getContainerBuilder();
-        $config = $this->getConfig();
+        $config = $this->getExtensionConfig();
 
         $builder->addDefinition($this->prefix('responseParser'))
             ->setFactory(ResponseParser::class)
@@ -77,11 +97,11 @@ final class FlexiExtension extends CompilerExtension
                 'clientFactory' => null,
                 'responseParser' => '@' . $this->prefix('responseParser'),
                 'baseConfig' => $this->createBaseConfig($config),
-                'guzzleConfig' => $config->guzzle,
+                'guzzleConfig' => $config['guzzle'],
                 'namedConnections' => $this->normalizeNamedConnections($config),
             ]);
 
-        if ($config->connections !== []) {
+        if ($config['connections'] !== []) {
             $defaultConnection = $this->resolveDefaultConnection($config);
             if ($defaultConnection !== null) {
                 $builder->addDefinition($this->prefix('client'))
@@ -93,25 +113,25 @@ final class FlexiExtension extends CompilerExtension
             return;
         }
 
-        if ($config->defaultConnection !== null) {
+        if ($config['defaultConnection'] !== null) {
             throw new \LogicException('The "defaultConnection" option can be used only together with "connections".');
         }
 
         FlexiConfig::fromArray([
-            'baseUrl' => $config->baseUrl,
-            'company' => $config->company,
-            'username' => $config->username,
-            'password' => $config->password,
-            'timeout' => $config->timeout,
+            'baseUrl' => $config['baseUrl'],
+            'company' => $config['company'],
+            'username' => $config['username'],
+            'password' => $config['password'],
+            'timeout' => $config['timeout'],
         ]);
 
         $builder->addDefinition($this->prefix('config'))
             ->setFactory([FlexiConfig::class, 'fromArray'], [[
-                'baseUrl' => $config->baseUrl,
-                'company' => $config->company,
-                'username' => $config->username,
-                'password' => $config->password,
-                'timeout' => $config->timeout,
+                'baseUrl' => $config['baseUrl'],
+                'company' => $config['company'],
+                'username' => $config['username'],
+                'password' => $config['password'],
+                'timeout' => $config['timeout'],
             ]])
             ->setAutowired(false);
 
@@ -150,7 +170,7 @@ final class FlexiExtension extends CompilerExtension
     public function beforeCompile(): void
     {
         $builder = $this->getContainerBuilder();
-        $config = $this->getConfig();
+        $config = $this->getExtensionConfig();
         $clientFactoryServiceName = $this->resolveClientFactoryServiceName($builder);
 
         $this->getServiceDefinition($builder, $this->prefix('flexiClientFactory'))
@@ -159,7 +179,7 @@ final class FlexiExtension extends CompilerExtension
         if ($builder->hasDefinition($this->prefix('guzzleClient'))) {
             $this->getServiceDefinition($builder, $this->prefix('guzzleClient'))
                 ->setFactory('@' . $clientFactoryServiceName . '::createClient', [[
-                    ...$config->guzzle,
+                    ...$config['guzzle'],
                 ]]);
         }
     }
@@ -167,22 +187,26 @@ final class FlexiExtension extends CompilerExtension
     /**
      * Vytvoří základní konfiguraci pro vytváření FlexiClient instancí.
      *
-     * @param object $config Výsledná konfigurace rozšíření.
+     * @param ExtensionConfig $config Výsledná konfigurace rozšíření.
      * @return array{baseUrl: string, username: string, password: string, timeout: float} Základní konfigurace připojení.
      */
-    private function createBaseConfig(object $config): array
+    private function createBaseConfig(array $config): array
     {
         $baseConfig = [
-            'baseUrl' => $config->baseUrl,
-            'username' => $config->username,
-            'password' => $config->password,
-            'timeout' => $config->timeout,
+            'baseUrl' => $config['baseUrl'],
+            'username' => $config['username'],
+            'password' => $config['password'],
+            'timeout' => $config['timeout'],
         ];
 
-        FlexiConfig::fromArray([
-            ...$baseConfig,
-            'company' => $config->company !== '' ? $config->company : '__base__',
-        ]);
+        // Pokud uz je v hlavni konfiguraci uvedena company, zvalidujeme rovnou
+        // i s ni - dostaneme tak ostrejsi chybu uz pri kompilaci. Jinak overime
+        // jen spolecne hodnoty (bez vazby na konkretni firmu).
+        if ($config['company'] !== '') {
+            FlexiConfig::fromArray([...$baseConfig, 'company' => $config['company']]);
+        } else {
+            FlexiConfig::assertConnectionDefaults($baseConfig);
+        }
 
         return $baseConfig;
     }
@@ -190,19 +214,19 @@ final class FlexiExtension extends CompilerExtension
     /**
      * Normalizuje pojmenovaná připojení do jednotné struktury.
      *
-     * @param object $config Výsledná konfigurace rozšíření.
+     * @param ExtensionConfig $config Výsledná konfigurace rozšíření.
      * @return array<string, array{
      *     config: array{baseUrl: string, company: string, username: string, password: string, timeout: float},
      *     guzzle: array<string, mixed>
      * }> Normalizovaná pojmenovaná připojení.
      */
-    private function normalizeNamedConnections(object $config): array
+    private function normalizeNamedConnections(array $config): array
     {
         $connections = [];
 
-        foreach ($config->connections as $name => $connectionDefinition) {
+        foreach ($config['connections'] as $name => $connectionDefinition) {
             $connection = is_string($connectionDefinition)
-                ? (object) [
+                ? [
                     'company' => $connectionDefinition,
                     'baseUrl' => null,
                     'username' => null,
@@ -213,18 +237,18 @@ final class FlexiExtension extends CompilerExtension
                 : $connectionDefinition;
 
             $resolvedConnectionConfig = [
-                'baseUrl' => $connection->baseUrl ?? $config->baseUrl,
-                'company' => $connection->company !== '' ? $connection->company : (string) $name,
-                'username' => $connection->username ?? $config->username,
-                'password' => $connection->password ?? $config->password,
-                'timeout' => $connection->timeout ?? $config->timeout,
+                'baseUrl' => $connection['baseUrl'] ?? $config['baseUrl'],
+                'company' => $connection['company'] !== '' ? $connection['company'] : $name,
+                'username' => $connection['username'] ?? $config['username'],
+                'password' => $connection['password'] ?? $config['password'],
+                'timeout' => $connection['timeout'] ?? $config['timeout'],
             ];
 
             FlexiConfig::fromArray($resolvedConnectionConfig);
 
-            $connections[(string) $name] = [
+            $connections[$name] = [
                 'config' => $resolvedConnectionConfig,
-                'guzzle' => $connection->guzzle ?? [],
+                'guzzle' => $connection['guzzle'] ?? [],
             ];
         }
 
@@ -234,31 +258,29 @@ final class FlexiExtension extends CompilerExtension
     /**
      * Určí název výchozího pojmenovaného připojení.
      *
-     * @param object $config Výsledná konfigurace rozšíření.
+     * @param ExtensionConfig $config Výsledná konfigurace rozšíření.
      * @return string|null Název výchozího připojení, nebo null.
      * @throws \LogicException Pokud nastavené `defaultConnection` neexistuje v `connections`.
      */
-    private function resolveDefaultConnection(object $config): ?string
+    private function resolveDefaultConnection(array $config): ?string
     {
-        if ($config->connections === []) {
+        if ($config['connections'] === []) {
             return null;
         }
 
-        if ($config->defaultConnection !== null) {
-            if (!array_key_exists($config->defaultConnection, $config->connections)) {
+        if ($config['defaultConnection'] !== null) {
+            if (!array_key_exists($config['defaultConnection'], $config['connections'])) {
                 throw new \LogicException(sprintf(
                     'Default Flexi connection "%s" was not found in "connections".',
-                    $config->defaultConnection,
+                    $config['defaultConnection'],
                 ));
             }
 
-            return $config->defaultConnection;
+            return $config['defaultConnection'];
         }
 
-        if (count($config->connections) === 1) {
-            $singleConnectionName = array_key_first($config->connections);
-
-            return is_string($singleConnectionName) ? $singleConnectionName : null;
+        if (count($config['connections']) === 1) {
+            return array_key_first($config['connections']);
         }
 
         return null;
@@ -317,5 +339,161 @@ final class FlexiExtension extends CompilerExtension
         }
 
         return $definition;
+    }
+
+    /**
+     * @return ExtensionConfig
+     */
+    private function getExtensionConfig(): array
+    {
+        $rawConfig = $this->toArray($this->getConfig(), 'Flexi extension config');
+
+        $defaultConnection = $rawConfig['defaultConnection'] ?? null;
+        if ($defaultConnection !== null && !is_string($defaultConnection)) {
+            throw new \LogicException('The "defaultConnection" option must be a string or null.');
+        }
+
+        return [
+            'baseUrl' => $this->requiredString($rawConfig, 'baseUrl'),
+            'company' => $this->requiredString($rawConfig, 'company'),
+            'username' => $this->requiredString($rawConfig, 'username'),
+            'password' => $this->requiredString($rawConfig, 'password'),
+            'timeout' => $this->requiredFloat($rawConfig, 'timeout'),
+            'guzzle' => $this->requiredMap($rawConfig, 'guzzle'),
+            'defaultConnection' => $defaultConnection,
+            'connections' => $this->normalizeConnections($rawConfig['connections'] ?? []),
+        ];
+    }
+
+    /**
+     * @return array<string, string|ConnectionInput>
+     */
+    private function normalizeConnections(mixed $value): array
+    {
+        $connections = $this->toArray($value, 'The "connections" option');
+        $normalized = [];
+
+        foreach ($connections as $name => $connectionDefinition) {
+            if (is_string($connectionDefinition)) {
+                $normalized[$name] = $connectionDefinition;
+                continue;
+            }
+
+            $connection = $this->toArray($connectionDefinition, sprintf('Connection "%s"', $name));
+
+            $company = $connection['company'] ?? '';
+            if (!is_string($company)) {
+                throw new \LogicException(sprintf('Connection "%s" has invalid "company" value.', $name));
+            }
+
+            $timeout = $this->nullableFloat($connection['timeout'] ?? null, sprintf('Connection "%s" timeout', $name));
+
+            $normalized[$name] = [
+                'company' => $company,
+                'baseUrl' => $this->nullableString($connection['baseUrl'] ?? null, sprintf('Connection "%s" baseUrl', $name)),
+                'username' => $this->nullableString($connection['username'] ?? null, sprintf('Connection "%s" username', $name)),
+                'password' => $this->nullableString($connection['password'] ?? null, sprintf('Connection "%s" password', $name)),
+                'timeout' => $timeout,
+                'guzzle' => $this->nullableMap($connection['guzzle'] ?? null, sprintf('Connection "%s" guzzle', $name)),
+            ];
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     */
+    private function requiredString(array $data, string $key): string
+    {
+        $value = $data[$key] ?? null;
+        if (!is_string($value)) {
+            throw new \LogicException(sprintf('The "%s" option must be a string.', $key));
+        }
+
+        return $value;
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     */
+    private function requiredFloat(array $data, string $key): float
+    {
+        $value = $data[$key] ?? null;
+        if (!is_int($value) && !is_float($value)) {
+            throw new \LogicException(sprintf('The "%s" option must be a float.', $key));
+        }
+
+        return (float) $value;
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     * @return array<string, mixed>
+     */
+    private function requiredMap(array $data, string $key): array
+    {
+        return $this->toArray($data[$key] ?? [], sprintf('The "%s" option', $key));
+    }
+
+    private function nullableString(mixed $value, string $context): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (!is_string($value)) {
+            throw new \LogicException(sprintf('%s must be a string or null.', $context));
+        }
+
+        return $value;
+    }
+
+    private function nullableFloat(mixed $value, string $context): ?float
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (!is_int($value) && !is_float($value)) {
+            throw new \LogicException(sprintf('%s must be a float or null.', $context));
+        }
+
+        return (float) $value;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function nullableMap(mixed $value, string $context): ?array
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        return $this->toArray($value, $context);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function toArray(mixed $value, string $context): array
+    {
+        if (is_object($value)) {
+            $value = get_object_vars($value);
+        }
+
+        if (!is_array($value)) {
+            throw new \LogicException(sprintf('%s must be an array or object.', $context));
+        }
+
+        $normalized = [];
+        foreach ($value as $key => $item) {
+            if (is_string($key)) {
+                $normalized[$key] = $item;
+            }
+        }
+
+        return $normalized;
     }
 }

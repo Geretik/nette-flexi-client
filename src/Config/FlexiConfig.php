@@ -68,6 +68,41 @@ final readonly class FlexiConfig
     }
 
     /**
+     * Overi pouze ty parametry, ktere jsou spolecne pro vsechna pripojeni
+     * (baseUrl, username, password, timeout) - tedy bez vazby na konkretni firmu.
+     *
+     * Tato metoda existuje primarne kvuli scenari, kdy mame v NEONu jednu
+     * spolecnou "base" konfiguraci a vedle ni vice pojmenovanych pripojeni.
+     * Kazde pripojeni si pak doplni vlastni `company`, ale spolecne vychozi
+     * hodnoty se daji validovat uz pri kompilaci DI kontejneru.
+     *
+     * @param array{
+     *     baseUrl: string,
+     *     username: string,
+     *     password: string,
+     *     timeout?: float|int
+     * } $data
+     * @throws InvalidArgumentException Pokud nektera hodnota neni platna.
+     */
+    public static function assertConnectionDefaults(array $data): void
+    {
+        self::assertBaseUrl($data['baseUrl']);
+
+        if ($data['username'] === '') {
+            throw new InvalidArgumentException('Username must not be empty.');
+        }
+
+        if ($data['password'] === '') {
+            throw new InvalidArgumentException('Password must not be empty.');
+        }
+
+        $timeout = isset($data['timeout']) ? (float) $data['timeout'] : 10.0;
+        if ($timeout <= 0) {
+            throw new InvalidArgumentException('Timeout must be greater than zero.');
+        }
+    }
+
+    /**
      * Vrátí konfiguraci jako pole se zamaskovaným heslem.
      *
      * @return array{
@@ -96,9 +131,7 @@ final readonly class FlexiConfig
      */
     private function assertValid(): void
     {
-        if ($this->baseUrl === '' || filter_var($this->baseUrl, FILTER_VALIDATE_URL) === false) {
-            throw new InvalidArgumentException('Invalid baseUrl. A valid absolute URL is required.');
-        }
+        self::assertBaseUrl($this->baseUrl);
 
         if ($this->company === '') {
             throw new InvalidArgumentException('Company must not be empty.');
@@ -114,6 +147,27 @@ final readonly class FlexiConfig
 
         if ($this->timeout <= 0) {
             throw new InvalidArgumentException('Timeout must be greater than zero.');
+        }
+    }
+
+    /**
+     * Overi, ze baseUrl je absolutni URL s povolenym schematem (http/https).
+     *
+     * @throws InvalidArgumentException Pokud URL chybi, je nevalidni nebo pouziva
+     *                                  jine schema nez http(s).
+     */
+    private static function assertBaseUrl(string $baseUrl): void
+    {
+        if ($baseUrl === '' || filter_var($baseUrl, FILTER_VALIDATE_URL) === false) {
+            throw new InvalidArgumentException('Invalid baseUrl. A valid absolute URL is required.');
+        }
+
+        $scheme = strtolower((string) parse_url($baseUrl, PHP_URL_SCHEME));
+        if (!in_array($scheme, ['http', 'https'], true)) {
+            throw new InvalidArgumentException(sprintf(
+                'Invalid baseUrl scheme "%s". Only http and https are supported.',
+                $scheme,
+            ));
         }
     }
 }

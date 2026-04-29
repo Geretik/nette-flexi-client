@@ -9,6 +9,7 @@ use Acme\AbraFlexi\Config\FlexiConfig;
 use Acme\AbraFlexi\Endpoint\EndpointBuilder;
 use Acme\AbraFlexi\Exception\ApiErrorException;
 use Acme\AbraFlexi\Exception\HttpException;
+use Acme\AbraFlexi\Exception\TransportException;
 use Acme\AbraFlexi\Http\GuzzleHttpTransport;
 use Acme\AbraFlexi\Response\ResponseParser;
 use GuzzleHttp\Client;
@@ -36,12 +37,10 @@ final class FlexiClientIntegrationTest extends TestCase
                 'nazev' => $createdName,
             ]));
 
-            $recordId = $created['results'][0]['id'] ?? null;
-            self::assertIsString($recordId);
-            self::assertNotSame('', $recordId);
+            $recordId = $this->extractCreatedRecordId($created);
 
             $loaded = $this->extractRecord($this->withRetry(static fn() => $client->get('adresar', $recordId)));
-            self::assertSame($recordId, (string) ($loaded['id'] ?? ''));
+            $this->assertRecordId($loaded, $recordId);
             self::assertSame($code, $loaded['kod'] ?? null);
             self::assertSame($createdName, $loaded['nazev'] ?? null);
 
@@ -51,7 +50,7 @@ final class FlexiClientIntegrationTest extends TestCase
             ]));
 
             $reloaded = $this->extractRecord($this->withRetry(static fn() => $client->get('adresar', $recordId)));
-            self::assertSame($recordId, (string) ($reloaded['id'] ?? ''));
+            $this->assertRecordId($reloaded, $recordId);
             self::assertSame($code, $reloaded['kod'] ?? null);
             self::assertSame($updatedName, $reloaded['nazev'] ?? null);
 
@@ -61,12 +60,25 @@ final class FlexiClientIntegrationTest extends TestCase
                 self::fail('Deleted record should not be readable anymore.');
             } catch (ApiErrorException | HttpException $exception) {
                 self::assertFalse(
+                    $this->isTransientTransportFailure($exception),
+                    'Deletion verification failed due to a transient transport failure.',
+                );
+                self::assertFalse(
                     $this->isParallelRequestLimit($exception),
                     'Deletion verification failed due to repeated rate limiting from the demo API.',
                 );
             }
 
             $recordId = null;
+        } catch (ApiErrorException | HttpException $exception) {
+            if ($this->isTransientTransportFailure($exception)) {
+                self::markTestSkipped(sprintf(
+                    'Integration endpoint is temporarily unavailable: %s',
+                    $exception->getMessage(),
+                ));
+            }
+
+            throw $exception;
         } finally {
             if (is_string($recordId) && $recordId !== '') {
                 try {
@@ -123,17 +135,21 @@ final class FlexiClientIntegrationTest extends TestCase
      */
     private function withRetry(callable $operation): mixed
     {
-        $maxAttempts = 4;
+        $maxAttempts = 6;
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             try {
                 return $operation();
             } catch (ApiErrorException | HttpException $exception) {
-                if (!$this->isParallelRequestLimit($exception) || $attempt === $maxAttempts) {
+                if (
+                    !$this->isParallelRequestLimit($exception)
+                    && !$this->isTransientTransportFailure($exception)
+                    || $attempt === $maxAttempts
+                ) {
                     throw $exception;
                 }
 
-                usleep($attempt * 250_000);
+                usleep($attempt * 500_000);
             }
         }
 
@@ -152,6 +168,25 @@ final class FlexiClientIntegrationTest extends TestCase
         }
 
         return false;
+    }
+
+    private function isTransientTransportFailure(ApiErrorException | HttpException $exception): bool
+    {
+        if ($exception instanceof TransportException) {
+            return true;
+        }
+
+        if (!$exception instanceof HttpException || $exception->getStatusCode() !== 0) {
+            return false;
+        }
+
+        $message = strtolower($exception->getMessage());
+
+        return str_contains($message, 'connection refused')
+            || str_contains($message, 'timed out')
+            || str_contains($message, 'could not resolve host')
+            || str_contains($message, 'connection reset')
+            || str_contains($message, 'temporary failure');
     }
 
     /**
@@ -181,5 +216,41 @@ final class FlexiClientIntegrationTest extends TestCase
         }
 
         return $normalized;
+    }
+
+    /**
+     * @param array<mixed> $createdResponse
+     */
+    private function extractCreatedRecordId(array $createdResponse): string
+    {
+        $results = $createdResponse['results'] ?? null;
+        if (!is_array($results) || $results === []) {
+            self::fail('Create response does not contain results.');
+        }
+
+        $firstResult = $results[0] ?? null;
+        if (!is_array($firstResult)) {
+            self::fail('Create response result has unexpected shape.');
+        }
+
+        $recordId = $firstResult['id'] ?? null;
+        if (!is_string($recordId) || $recordId === '') {
+            self::fail('Create response does not contain a valid record ID.');
+        }
+
+        return $recordId;
+    }
+
+    /**
+     * @param array<string, mixed> $record
+     */
+    private function assertRecordId(array $record, string $expectedId): void
+    {
+        $id = $record['id'] ?? null;
+        if (!is_string($id) && !is_int($id)) {
+            self::fail('Record ID has unexpected type.');
+        }
+
+        self::assertSame($expectedId, (string) $id);
     }
 }

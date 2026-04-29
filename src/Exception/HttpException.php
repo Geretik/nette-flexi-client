@@ -8,8 +8,11 @@ use Throwable;
 
 /**
  * Reprezentuje HTTP chybu pri komunikaci s Abra Flexi API.
+ *
+ * Pokud `statusCode` je 0, jedna se obvykle o transportni chybu (siti, DNS,
+ * timeout) - viz specializovana podtrida {@see TransportException}.
  */
-final class HttpException extends FlexiException
+class HttpException extends FlexiException
 {
     /**
      * @param string $message Lidsky citelna chybova zprava.

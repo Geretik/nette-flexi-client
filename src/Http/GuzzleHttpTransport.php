@@ -6,6 +6,8 @@ namespace Acme\AbraFlexi\Http;
 
 use Acme\AbraFlexi\Config\FlexiConfig;
 use Acme\AbraFlexi\Exception\HttpException;
+use Acme\AbraFlexi\Exception\TransportException;
+use Acme\AbraFlexi\Sensitive\SensitiveDataMasker;
 use DOMDocument;
 use DOMElement;
 use DOMNode;
@@ -20,16 +22,22 @@ use Psr\Log\LoggerInterface;
  */
 final readonly class GuzzleHttpTransport implements HttpTransportInterface
 {
+    private SensitiveDataMasker $masker;
+
     /**
      * @param ClientInterface $client Guzzle klient pouzity pro HTTP volani.
      * @param FlexiConfig $config Konfigurace pripojeni a autentizace.
      * @param LoggerInterface|null $logger Volitelny logger pro diagnostiku.
+     * @param SensitiveDataMasker|null $masker Volitelna instance maskeru;
+     *                                         pokud chybi, pouzije se vychozi.
      */
     public function __construct(
         private ClientInterface $client,
         private FlexiConfig $config,
         private ?LoggerInterface $logger = null,
+        ?SensitiveDataMasker $masker = null,
     ) {
+        $this->masker = $masker ?? new SensitiveDataMasker();
     }
 
     /**
@@ -71,10 +79,20 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
                 'exceptionMessage' => $maskedExceptionMessage,
             ]);
 
-            throw new HttpException(
+            // Pokud server alespon vratil HTTP odpoved (autentizace, 5xx atd.),
+            // jde o klasickou HTTP chybu. Jinak je to cista transportni chyba
+            // (DNS, TCP, TLS, timeout) a ma vlastni specializovanou vyjimku.
+            if ($statusCode > 0) {
+                throw new HttpException(
+                    message: sprintf('HTTP request failed with status %d for %s %s.', $statusCode, $upperMethod, $maskedUrl),
+                    statusCode: $statusCode,
+                    responseBody: $responseBody,
+                    previous: $exception,
+                );
+            }
+
+            throw new TransportException(
                 message: sprintf('HTTP transport error for %s %s: %s', $upperMethod, $maskedUrl, $maskedExceptionMessage),
-                statusCode: $statusCode,
-                responseBody: $responseBody,
                 previous: $exception,
             );
         }
@@ -150,8 +168,8 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
                 continue;
             }
 
-            if ($this->isSensitiveKey($normalizedKey)) {
-                $masked[$key] = '***';
+            if ($this->masker->isSensitiveKey($normalizedKey)) {
+                $masked[$key] = SensitiveDataMasker::MASK;
                 continue;
             }
 
@@ -229,7 +247,7 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
 
         try {
             $decoded = json_decode($payload, true, 512, JSON_THROW_ON_ERROR);
-            $masked = $this->maskSensitiveValue($decoded);
+            $masked = $this->masker->mask($decoded);
 
             return json_encode($masked, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         } catch (JsonException) {
@@ -274,17 +292,20 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
         }
 
         foreach (iterator_to_array($node->attributes) as $attribute) {
-            if ($this->isSensitiveKey(strtolower($attribute->name))) {
-                $attribute->value = '***';
+            if ($this->masker->isSensitiveKey($attribute->name)) {
+                $attribute->value = SensitiveDataMasker::MASK;
             }
         }
 
-        if ($this->isSensitiveKey(strtolower($node->tagName))) {
+        if ($this->masker->isSensitiveKey($node->tagName)) {
             while ($node->firstChild !== null) {
                 $node->removeChild($node->firstChild);
             }
 
-            $node->appendChild($node->ownerDocument->createTextNode('***'));
+            $ownerDocument = $node->ownerDocument;
+            if ($ownerDocument instanceof DOMDocument) {
+                $node->appendChild($ownerDocument->createTextNode(SensitiveDataMasker::MASK));
+            }
 
             return;
         }
@@ -292,30 +313,6 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
         foreach (iterator_to_array($node->childNodes) as $childNode) {
             $this->maskXmlNode($childNode);
         }
-    }
-
-    /**
-     * Rekurzivne zamaskuje citlive hodnoty podle nazvu klice.
-     */
-    private function maskSensitiveValue(mixed $value, ?string $key = null): mixed
-    {
-        if ($key !== null && $this->isSensitiveKey(strtolower($key))) {
-            return '***';
-        }
-
-        if (!is_array($value)) {
-            return $value;
-        }
-
-        $masked = [];
-        foreach ($value as $nestedKey => $nestedValue) {
-            $masked[$nestedKey] = $this->maskSensitiveValue(
-                $nestedValue,
-                is_string($nestedKey) ? $nestedKey : null,
-            );
-        }
-
-        return $masked;
     }
 
     /**
@@ -368,11 +365,11 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
             }
 
             [$encodedKey] = explode('=', $pair, 2);
-            if (!$this->isSensitiveQueryKey(rawurldecode($encodedKey))) {
+            if (!$this->masker->isSensitivePath(rawurldecode($encodedKey))) {
                 continue;
             }
 
-            $pairs[$index] = $encodedKey . '=***';
+            $pairs[$index] = $encodedKey . '=' . SensitiveDataMasker::MASK;
         }
 
         return implode('&', $pairs);
@@ -392,48 +389,5 @@ final readonly class GuzzleHttpTransport implements HttpTransportInterface
     private function isUrlKey(string $key): bool
     {
         return in_array($key, ['url', 'uri'], true);
-    }
-
-    /**
-     * Zkontroluje, zda query klic obsahuje citlivy segment.
-     */
-    private function isSensitiveQueryKey(string $key): bool
-    {
-        $segments = preg_split('/[\[\].]+/', strtolower($key), -1, PREG_SPLIT_NO_EMPTY);
-        if ($segments === false || $segments === []) {
-            return $this->isSensitiveKey(strtolower($key));
-        }
-
-        foreach ($segments as $segment) {
-            if ($this->isSensitiveKey($segment)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Urci, zda je klic povazovan za citlivy.
-     */
-    private function isSensitiveKey(string $key): bool
-    {
-        return in_array($key, [
-            'password',
-            'passwd',
-            'authorization',
-            'proxy-authorization',
-            'token',
-            'api_key',
-            'apikey',
-            'api-key',
-            'secret',
-            'cookie',
-            'set-cookie',
-        ], true)
-            || str_contains($key, 'token')
-            || str_contains($key, 'secret')
-            || str_contains($key, 'authorization')
-            || str_contains($key, 'cookie');
     }
 }

@@ -6,6 +6,7 @@ namespace Acme\AbraFlexi\Tests\Http;
 
 use Acme\AbraFlexi\Config\FlexiConfig;
 use Acme\AbraFlexi\Exception\HttpException;
+use Acme\AbraFlexi\Exception\TransportException;
 use Acme\AbraFlexi\Http\GuzzleHttpTransport;
 use Acme\AbraFlexi\Http\HttpResponse;
 use GuzzleHttp\Client;
@@ -43,6 +44,7 @@ final class GuzzleHttpTransportTest extends TestCase
         self::assertInstanceOf(HttpResponse::class, $response);
         self::assertSame(200, $response->statusCode);
         self::assertSame('{"ok":true}', $response->body);
+        self::assertIsArray($history);
         self::assertCount(1, $history);
         self::assertSame(['demo-user', 'demo-password'], $history[0]['options']['auth']);
         self::assertSame(10.0, $history[0]['options']['timeout']);
@@ -87,6 +89,7 @@ final class GuzzleHttpTransportTest extends TestCase
             $transport->request('GET', 'https://demo.flexibee.eu/c/demo-company/adresar');
             self::fail('Expected HttpException was not thrown.');
         } catch (HttpException $exception) {
+            self::assertInstanceOf(TransportException::class, $exception);
             self::assertSame(0, $exception->getStatusCode());
             self::assertNull($exception->getResponseBody());
             self::assertStringContainsString('HTTP transport error', $exception->getMessage());
@@ -123,10 +126,14 @@ final class GuzzleHttpTransportTest extends TestCase
             self::assertCount(2, $logger->records);
             $errorRecord = $logger->records[1];
             self::assertSame('error', $errorRecord['level']);
-            self::assertTrue(is_a($errorRecord['context']['exceptionClass'], RequestException::class, true));
+            $exceptionClass = $errorRecord['context']['exceptionClass'] ?? null;
+            self::assertIsString($exceptionClass);
+            self::assertTrue(is_a($exceptionClass, RequestException::class, true));
+            $exceptionMessage = $errorRecord['context']['exceptionMessage'] ?? null;
+            self::assertIsString($exceptionMessage);
             self::assertStringContainsString(
                 'https://demo-user:***@demo.flexibee.eu/c/demo-company/adresar?token=***',
-                $errorRecord['context']['exceptionMessage'],
+                $exceptionMessage,
             );
             self::assertArrayNotHasKey('exception', $errorRecord['context']);
             self::assertStringNotContainsString('secret-token', json_encode($errorRecord['context'], JSON_THROW_ON_ERROR));
@@ -157,12 +164,18 @@ final class GuzzleHttpTransportTest extends TestCase
         $firstRecord = $logger->records[0];
         self::assertSame('debug', $firstRecord['level']);
         self::assertSame('Sending Flexi API request.', $firstRecord['message']);
-        self::assertSame('***', $firstRecord['context']['options']['auth'][1]);
-        self::assertSame('***', $firstRecord['context']['options']['headers']['Authorization']);
-        self::assertSame('***', $firstRecord['context']['options']['password']);
+        $options = $firstRecord['context']['options'] ?? null;
+        self::assertIsArray($options);
+        $auth = $options['auth'] ?? null;
+        self::assertIsArray($auth);
+        self::assertSame('***', $auth[1] ?? null);
+        $headers = $options['headers'] ?? null;
+        self::assertIsArray($headers);
+        self::assertSame('***', $headers['Authorization'] ?? null);
+        self::assertSame('***', $options['password'] ?? null);
         self::assertSame(
             '{"foo":"bar","password":"***","nested":{"token":"***"}}',
-            $firstRecord['context']['options']['body'],
+            $options['body'] ?? null,
         );
         self::assertStringNotContainsString('demo-password', json_encode($firstRecord['context'], JSON_THROW_ON_ERROR));
         self::assertStringNotContainsString('secret-password', json_encode($firstRecord['context'], JSON_THROW_ON_ERROR));
@@ -221,7 +234,9 @@ final class GuzzleHttpTransportTest extends TestCase
             self::assertCount(3, $logger->records);
             $responseRecord = $logger->records[1];
             self::assertSame('Received Flexi API response.', $responseRecord['message']);
-            self::assertSame('***', $responseRecord['context']['headers']['Set-Cookie']);
+            $responseHeaders = $responseRecord['context']['headers'] ?? null;
+            self::assertIsArray($responseHeaders);
+            self::assertSame('***', $responseHeaders['Set-Cookie'] ?? null);
 
             $warningRecord = $logger->records[2];
             self::assertSame('warning', $warningRecord['level']);
@@ -323,9 +338,26 @@ final class InMemoryLogger implements LoggerInterface
     public function log($level, Stringable|string $message, array $context = []): void
     {
         $this->records[] = [
-            'level' => (string) $level,
+            'level' => $this->normalizeLevel($level),
             'message' => (string) $message,
             'context' => $context,
         ];
+    }
+
+    private function normalizeLevel(mixed $level): string
+    {
+        if (is_string($level)) {
+            return $level;
+        }
+
+        if (is_int($level) || is_float($level) || is_bool($level)) {
+            return (string) $level;
+        }
+
+        if ($level instanceof Stringable) {
+            return (string) $level;
+        }
+
+        return get_debug_type($level);
     }
 }

@@ -12,6 +12,7 @@ use Acme\AbraFlexi\Http\GuzzleHttpTransport;
 use Contributte\Guzzlette\DI\GuzzleExtension;
 use GuzzleHttp\Client;
 use Nette\DI\Compiler;
+use Nette\DI\Container;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
@@ -49,9 +50,7 @@ final class FlexiExtensionTest extends TestCase
         ]);
 
         eval($compiler->compile());
-
-        /** @var object $container */
-        $container = new $className();
+        $container = $this->createContainer($className);
 
         $client = $container->getByType(FlexiClient::class);
         self::assertInstanceOf(FlexiClient::class, $client);
@@ -90,9 +89,7 @@ final class FlexiExtensionTest extends TestCase
         ]);
 
         eval($compiler->compile());
-
-        /** @var object $container */
-        $container = new $className();
+        $container = $this->createContainer($className);
 
         $builderA = $container->getService('abraA.endpointBuilder');
         self::assertInstanceOf(EndpointBuilder::class, $builderA);
@@ -137,9 +134,7 @@ final class FlexiExtensionTest extends TestCase
         ]);
 
         eval($compiler->compile());
-
-        /** @var object $container */
-        $container = new $className();
+        $container = $this->createContainer($className);
 
         $defaultClient = $container->getByType(FlexiClient::class);
         self::assertInstanceOf(FlexiClient::class, $defaultClient);
@@ -174,5 +169,15 @@ final class FlexiExtensionTest extends TestCase
         $endpointBuilder = $property->getValue($client);
 
         return $endpointBuilder;
+    }
+
+    private function createContainer(string $className): Container
+    {
+        $container = new $className();
+        if (!$container instanceof Container) {
+            self::fail(sprintf('Compiled class "%s" is not a Nette DI container.', $className));
+        }
+
+        return $container;
     }
 }
