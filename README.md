@@ -330,6 +330,9 @@ agendou:
 - vydaná faktura: `faktura-vydana`
 - přijatá faktura: `faktura-prijata`
 
+To znamená, že fakturu lze do ABRA Flexi běžně odeslat jak přes přímé
+`post()`, tak přes `query(...)->post(...)`.
+
 ```php
 $created = $flexiClient->post('faktura-vydana', [
     'kod' => 'FV-2026-0001',
@@ -368,9 +371,18 @@ $invoices = $flexiClient->query('faktura-vydana')
 $invoice = $flexiClient->query('faktura-vydana')
     ->get(FlexiRef::code('FV-2026-0001'));
 
-// Vytvoření záznamu s query parametry
-$result = $flexiClient->query('adresar')
+// Odeslání faktury s query parametry
+$result = $flexiClient->query('faktura-vydana')
     ->with('dry-run', 'true')
+    ->with('code-only', 'true')
+    ->post([
+        'kod' => 'FV-2026-0002',
+        'firma' => FlexiRef::code('CUST-001'),
+        'typDokl' => FlexiRef::id('1'),
+    ]);
+
+// Vytvoření jiného záznamu funguje stejně
+$customer = $flexiClient->query('adresar')
     ->post(['kod' => 'CUST-001', 'nazev' => 'Acme s.r.o.']);
 
 // Automatické stránkování
