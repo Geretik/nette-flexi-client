@@ -11,8 +11,10 @@ use Acme\AbraFlexi\Exception\ParseException;
 use Acme\AbraFlexi\Http\HttpResponse;
 use Acme\AbraFlexi\Http\HttpTransportInterface;
 use Acme\AbraFlexi\Payload\PayloadEncoder;
+use Acme\AbraFlexi\Query\FlexiQuery;
 use Acme\AbraFlexi\Response\ResponseParser;
 use Acme\AbraFlexi\Sensitive\SensitiveDataMasker;
+use Generator;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -113,6 +115,45 @@ final readonly class FlexiClient
     public function delete(string $agenda, string $recordId, array $query = []): array
     {
         return $this->request('DELETE', $agenda, $recordId, $query, [], PayloadEncoder::FORMAT_JSON);
+    }
+
+    /**
+     * Vrati fluent query builder pro zadanou agendu.
+     *
+     * @param string $agenda Nazev agendy / endpointu.
+     * @return FlexiQuery Builder pro sestaveni dotazu.
+     */
+    public function query(string $agenda): FlexiQuery
+    {
+        return new FlexiQuery($this, $agenda);
+    }
+
+    /**
+     * Postupne prochazi vsechny stranky vysledku a yield-uje jednotlive zaznamy.
+     *
+     * Strankovani se zastavi, jakmile stranka obsahuje mene zaznamu nez $pageSize.
+     *
+     * @param string $agenda Nazev agendy / endpointu.
+     * @param array<string, scalar|null> $query Volitelne parametry do URL.
+     * @param int $pageSize Pocet zaznamu na stranku.
+     * @return Generator<int, array<mixed>>
+     */
+    public function paginate(string $agenda, array $query = [], int $pageSize = 100): Generator
+    {
+        $start = 0;
+        do {
+            $page = $this->get($agenda, null, array_replace($query, [
+                'limit' => $pageSize,
+                'start' => $start,
+            ]));
+            $records = $this->extractRecordList($page);
+            foreach ($records as $record) {
+                if (is_array($record)) {
+                    yield $record;
+                }
+            }
+            $start += $pageSize;
+        } while (count($records) >= $pageSize);
     }
 
     /**
@@ -230,5 +271,25 @@ final readonly class FlexiClient
         }
 
         return null;
+    }
+
+    /**
+     * Z naparsovane odpovedi vybere pole zaznamu.
+     *
+     * Flexi vraci odpoved ve tvaru `['@metadata' => ..., 'agenda-name' => [...records...]]`.
+     * Metoda hleda prvni klic, ktery nezacina `@` a jehoz hodnota je pole.
+     *
+     * @param array<mixed> $response
+     * @return array<mixed>
+     */
+    private function extractRecordList(array $response): array
+    {
+        foreach ($response as $key => $value) {
+            if (!str_starts_with((string) $key, '@') && is_array($value)) {
+                return $value;
+            }
+        }
+
+        return [];
     }
 }

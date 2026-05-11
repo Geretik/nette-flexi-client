@@ -17,9 +17,10 @@ konfigurace přes NEON, integrace přes vlastní DI extension.
   - [Základní CRUD](#základní-crud)
   - [Injekce do Nette presenteru](#injekce-do-nette-presenteru)
   - [Práce s fakturami](#práce-s-fakturami)
-  - [Filtrování přes Flexi query language](#filtrování-přes-flexi-query-language)
+  - [Fluent query builder (`FlexiQuery`)](#fluent-query-builder-flexiquery)
+  - [Reference na záznamy (`FlexiRef`)](#reference-na-záznamy-flexiref)
   - [Stránkování velkých seznamů](#stránkování-velkých-seznamů)
-  - [Reference na záznamy (`code:`, `ext:`, `id:`)](#reference-na-záznamy-code-ext-id)
+  - [Filtrování přes Flexi query language](#filtrování-přes-flexi-query-language)
   - [Hromadný import více záznamů](#hromadný-import-více-záznamů)
   - [Validace bez zápisu (dry-run, code-only)](#validace-bez-zápisu-dry-run-code-only)
   - [Stažení PDF / dalších formátů](#stažení-pdf--dalších-formátů)
@@ -86,8 +87,10 @@ Knihovna je rozdělená do oddělených vrstev s jednosměrnou závislostí
 | [`Http\HttpTransportInterface`](src/Http/HttpTransportInterface.php) | Kontrakt pro transport (lze nahradit) |
 | [`Http\GuzzleHttpTransport`](src/Http/GuzzleHttpTransport.php) | Výchozí Guzzle implementace s logováním a maskováním |
 | [`Response\ResponseParser`](src/Response/ResponseParser.php) | Parsuje JSON/XML a unifikuje API chyby |
-| [`Client\FlexiClient`](src/Client/FlexiClient.php) | Veřejné API – GET/POST/PUT/DELETE |
+| [`Client\FlexiClient`](src/Client/FlexiClient.php) | Veřejné API – GET/POST/PUT/DELETE + `query()` + `paginate()` |
 | [`Client\FlexiClientFactory`](src/Client/FlexiClientFactory.php) | Tovární třída pro multi-company / multi-server |
+| [`Query\FlexiQuery`](src/Query/FlexiQuery.php) | Immutable fluent builder pro sestavení dotazů |
+| [`Query\FlexiRef`](src/Query/FlexiRef.php) | Pomocné metody pro `code:`, `ext:`, `id:` reference |
 | [`DI\FlexiExtension`](src/DI/FlexiExtension.php) | Nette extension – registrace služeb z NEON |
 | [`Exception\*`](src/Exception/) | `FlexiException`, `HttpException`, `TransportException`, `ApiErrorException`, `ParseException` |
 
@@ -277,6 +280,8 @@ Podporované metody a signatury klienta:
 | `post(string $agenda, array\|string $payload, array $query = [])` | `POST /c/{company}/{agenda}.json` | Vytvoření / hromadný import |
 | `put(string $agenda, string $recordId, array\|string $payload, array $query = [])` | `PUT /c/{company}/{agenda}/{id}.json` | Update konkrétního záznamu |
 | `delete(string $agenda, string $recordId, array $query = [])` | `DELETE /c/{company}/{agenda}/{id}.json` | Smazání záznamu |
+| `query(string $agenda)` | – | Vrátí [`FlexiQuery`](#fluent-query-builder-flexiquery) builder |
+| `paginate(string $agenda, array $query = [], int $pageSize = 100)` | `GET` s `limit`/`start` | [`Generator`](#stránkování-velkých-seznamů) přes všechny stránky |
 
 Pole `$query` může obsahovat libovolné Flexi parametry
 (`limit`, `start`, `detail`, `code-only`, `dry-run`, …).
@@ -341,33 +346,118 @@ $list = $flexiClient->get('faktura-vydana', null, [
 $invoices = $list['faktura-vydana'] ?? [];
 ```
 
-### Filtrování přes Flexi query language
+### Fluent query builder (`FlexiQuery`)
 
-ABRA Flexi podporuje vlastní filtrovací syntaxi předávanou jako součást
-endpointu v závorkách. Stačí ji zapsat do názvu agendy – `EndpointBuilder`
-ji ponechá tak, jak je:
+`FlexiClient::query()` vrátí immutable builder, který umožňuje řetězit
+parametry dotazu bez ručního sestavování polí. Každá metoda vrací nový klon –
+builder je bezpečné sdílet a znovu použít.
 
 ```php
-// Vsechny adresy s konkretnim kodem
-$result = $flexiClient->get("adresar/(kod eq 'CUST-001')");
+use Acme\AbraFlexi\Client\FlexiClient;
+use Acme\AbraFlexi\Query\FlexiRef;
 
-// Faktury vystavene v dubnu 2026, nezaplacene
-$result = $flexiClient->get(
-    "faktura-vydana/(datVyst gte '2026-04-01' and datVyst lt '2026-05-01' and stavUhrK ne 'stavUhr.uhrazeno')",
-    null,
-    ['detail' => 'summary', 'limit' => 200],
-);
+// Načtení filtrovaného a seřazeného seznamu
+$invoices = $flexiClient->query('faktura-vydana')
+    ->where("(stav='uhrazena')")
+    ->orderByDesc('datVyst')
+    ->limit(50)
+    ->detail('full')
+    ->get();
 
-$invoices = $result['faktura-vydana'] ?? [];
+// Konkrétní záznam
+$invoice = $flexiClient->query('faktura-vydana')
+    ->get(FlexiRef::code('FV-2026-0001'));
+
+// Vytvoření záznamu s query parametry
+$result = $flexiClient->query('adresar')
+    ->with('dry-run', 'true')
+    ->post(['kod' => 'CUST-001', 'nazev' => 'Acme s.r.o.']);
+
+// Automatické stránkování
+foreach ($flexiClient->query('adresar')->where("(stat='CZ')")->paginate(100) as $record) {
+    // zpracuj záznam
+}
 ```
 
-> Operátory: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `begins`, `ends`,
-> spojovat lze přes `and` / `or`. Hodnoty se uvozují apostrofem.
+Dostupné metody builderu:
+
+| Metoda | Popis |
+|---|---|
+| `where(string $expression)` | Přidá podmínku filtru; více volání se spojí operátorem `and` |
+| `limit(int $limit)` | Omezí počet vrácených záznamů |
+| `offset(int $start)` | Nastaví offset pro stránkování |
+| `orderBy(string $field, string $direction = 'asc')` | Přidá řazení (`asc` → `@A`, `desc` → `@D`) |
+| `orderByAsc(string $field)` | Zkratka pro vzestupné řazení |
+| `orderByDesc(string $field)` | Zkratka pro sestupné řazení |
+| `detail(string $detail)` | Nastaví detail odpovědi (`full`, `summary`, `id`, …) |
+| `includes(string ...$fields)` | Přidá pole do `includes` (součásti odpovědi) |
+| `with(string $key, scalar\|null $value)` | Přidá libovolný vlastní query parametr |
+| `get(?string $recordId = null)` | Odešle GET |
+| `post(array\|string $payload)` | Odešle POST |
+| `put(string $recordId, array\|string $payload)` | Odešle PUT |
+| `delete(string $recordId)` | Odešle DELETE |
+| `paginate(int $pageSize = 100)` | Vrátí `Generator` přes všechny stránky |
+
+### Reference na záznamy (`FlexiRef`)
+
+`FlexiRef` je pomocná třída pro sestavení referencí na záznamy (`code:`,
+`ext:`, `id:`). Odstraňuje chyby z ručního skládání řetězců.
+
+```php
+use Acme\AbraFlexi\Query\FlexiRef;
+
+// Odkaz přes uživatelský kód záznamu
+FlexiRef::code('FAK-2024-001')     // → 'code:FAK-2024-001'
+
+// Odkaz přes externí ID z jiného systému
+FlexiRef::ext('myapp', '42')       // → 'ext:myapp:42'
+
+// Odkaz přes interní databázové ID
+FlexiRef::id('123')                // → 'id:123'
+```
+
+Typické použití v payloadu faktury:
+
+```php
+$flexiClient->post('faktura-vydana', [
+    'kod' => 'FV-2026-0042',
+    'firma'   => FlexiRef::code('CUST-001'),
+    'typDokl' => FlexiRef::ext('erp-mapping', 'invoice-out'),
+    'mena'    => FlexiRef::id('1'),
+]);
+```
+
+Ref funguje i v metodě `get()` jako `$recordId`:
+
+```php
+$client->get('adresar', FlexiRef::code('CUST-001'));
+$client->get('faktura-vydana', FlexiRef::ext('erp', '99'));
+```
 
 ### Stránkování velkých seznamů
 
-Pro průchod celou agendou kombinuj `limit` + `start`. Flexi vrací pole
-v klíči podle názvu agendy (zde `adresar`):
+Nejsnazší způsob je `paginate()` – automaticky prochází všechny stránky
+a yield-uje jednotlivé záznamy. Zastaví se, jakmile stránka vrátí méně
+záznamů než `$pageSize`.
+
+```php
+// Přes FlexiClient přímo
+foreach ($flexiClient->paginate('adresar', ['detail' => 'summary'], pageSize: 100) as $record) {
+    // každý $record je asociativní pole jednoho záznamu
+}
+
+// Přes builder (lze kombinovat s filtry a řazením)
+foreach ($flexiClient->query('faktura-vydana')
+    ->where("(stav='uhrazena')")
+    ->orderByAsc('datVyst')
+    ->paginate(50) as $invoice
+) {
+    // zpracuj fakturu
+}
+```
+
+Pokud preferuješ ruční stránkování s přímou kontrolou, lze stále kombinovat
+`limit` + `start` na metodě `get()` nebo v builderu:
 
 ```php
 $pageSize = 100;
@@ -390,22 +480,28 @@ do {
 } while (count($rows) === $pageSize);
 ```
 
-### Reference na záznamy (`code:`, `ext:`, `id:`)
+### Filtrování přes Flexi query language
 
-Flexi umožňuje odkazovat na cizí záznamy přes string prefix místo numerického
-ID. Klient nemá speciální podporu, prostě tu hodnotu pošli:
+ABRA Flexi podporuje vlastní filtrovací syntaxi předávanou jako součást
+endpointu v závorkách. Stačí ji zapsat do názvu agendy – `EndpointBuilder`
+ji ponechá tak, jak je. Lze také použít `->where()` na builderu (viz výše).
 
 ```php
-$flexiClient->post('faktura-vydana', [
-    'kod' => 'FV-2026-0042',
-    // odkaz na adresar.kod = 'CUST-001'
-    'firma' => 'code:CUST-001',
-    // odkaz na typ dokladu pres externi ID
-    'typDokl' => 'ext:erp-mapping:invoice-out',
-    // explicitne pres numericke ID
-    'mena' => 'id:1',
-]);
+// Vsechny adresy s konkretnim kodem
+$result = $flexiClient->get("adresar/(kod eq 'CUST-001')");
+
+// Faktury vystavene v dubnu 2026, nezaplacene
+$result = $flexiClient->get(
+    "faktura-vydana/(datVyst gte '2026-04-01' and datVyst lt '2026-05-01' and stavUhrK ne 'stavUhr.uhrazeno')",
+    null,
+    ['detail' => 'summary', 'limit' => 200],
+);
+
+$invoices = $result['faktura-vydana'] ?? [];
 ```
+
+> Operátory: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `begins`, `ends`,
+> spojovat lze přes `and` / `or`. Hodnoty se uvozují apostrofem.
 
 ### Hromadný import více záznamů
 
@@ -718,7 +814,9 @@ Pokrytí:
 - jednotkové testy pro builder endpointů,
 - jednotkové testy pro parser odpovědí (JSON i XML, error payloads),
 - jednotkové testy pro HTTP transport včetně maskování v logu,
-- jednotkové testy pro hlavního klienta (CRUD, normalizace payloadu, error mapping),
+- jednotkové testy pro hlavního klienta (CRUD, normalizace payloadu, error mapping, stránkování),
+- jednotkové testy pro `FlexiQuery` (sestavení query parametrů, immutabilita, HTTP metody),
+- jednotkové testy pro `FlexiRef` (prefixes `code:`, `ext:`, `id:`),
 - jednotkové testy pro `FlexiClientFactory` (named + runtime),
 - kompilační test DI rozšíření (jeden alias, více aliasů, named connections),
 - volitelný integrační test pokrývající create/read/update/delete proti reálné Flexi.
@@ -741,7 +839,7 @@ v jednotlivých agendách (např. povinné atributy faktury, stavy dokladů,
 | Podporované formáty (JSON, XML, …) | `PayloadEncoder` + `ResponseParser` | [Podporované formáty](https://podpora.flexibee.eu/cs/articles/4719998-podporovane-formaty) |
 | Export PDF / XLS / ISDOC | low-level `HttpTransportInterface` (viz [příklad výše](#stažení-pdf--dalších-formátů)) | [Export tiskových sestav](https://podpora.flexibee.eu/cs/articles/4720042-export-tiskovych-sestav-pdf-xls) |
 | Hromadné importy a `results` v odpovědi | `FlexiClient::post()` s polem záznamů | [Sestavování URL](https://podpora.flexibee.eu/cs/articles/4713911-sestavovani-url) |
-| Reference `code:`, `ext:`, `id:` | předáváš v payloadu (viz [příklad výše](#reference-na-záznamy-code-ext-id)) | [Sestavování URL](https://podpora.flexibee.eu/cs/articles/4713911-sestavovani-url) |
+| Reference `code:`, `ext:`, `id:` | [`FlexiRef`](src/Query/FlexiRef.php) (viz [příklad výše](#reference-na-záznamy-flexiref)) | [Sestavování URL](https://podpora.flexibee.eu/cs/articles/4713911-sestavovani-url) |
 | Získání položek dokladů | předáš `detail=full` nebo zanořený dotaz | [Získání položek dokladů](https://podpora.flexibee.eu/cs/articles/4713930-ziskani-polozek-dokladu) |
 | Navázané doklady přes API | běžné CRUD na propojovacích agendách | [Navázané doklady přes API](https://podpora.flexibee.eu/cs/articles/4858948-navazane-doklady-pres-api) |
 | Mazání pomocí `action="delete"` v JSON | součást payloadu | [Použití `action="delete"`](https://podpora.flexibee.eu/cs/articles/3852838-vymazani-zanorene-evidence-prostrednictvim-json-formatu) |
